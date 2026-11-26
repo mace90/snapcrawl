@@ -6,12 +6,14 @@ const slug = (s) => String(s).replace(/[^a-z0-9.]+/gi, '-').replace(/^-|-$/g, ''
 // All output lives in one folder (default .snapcrawl/):
 //   runs/<runId>/atlas.json + screens/*.png
 //   diffs/<base>__<head>/report.json + *.png
+//   reports/*.html  (exported reports)
 //   baselines.json  (baseline run id per app)
 export class Store {
   constructor(root) {
     this.root = path.resolve(root);
     this.runsDir = path.join(this.root, 'runs');
     this.diffsDir = path.join(this.root, 'diffs');
+    this.reportsDir = path.join(this.root, 'reports');
   }
 
   ensure() {
@@ -97,6 +99,21 @@ export class Store {
     fs.mkdirSync(this.root, { recursive: true });
     fs.writeFileSync(path.join(this.root, 'baselines.json'), JSON.stringify(all, null, 2) + '\n');
     return app;
+  }
+
+  // Default comparison: the app of the newest finished run, its baseline as base, and the newest
+  // run of that app created after the baseline as head. Never picks an older run on its own.
+  defaultPair() {
+    const runs = this.listRuns().filter((r) => r.status === 'done');
+    const baselines = this.readBaselines();
+    const latest = runs.find((r) => baselines[r.app]);
+    if (!latest) return { error: 'Need two runs of the same app. Crawl it again after your next build, or try: snapcrawl demo' };
+    const app = latest.appName || latest.app;
+    const base = runs.find((r) => r.id === baselines[latest.app]);
+    if (!base) return { error: `${app}: the baseline ${baselines[latest.app]} was not found. Set one with: snapcrawl baseline <run>` };
+    const head = runs.find((r) => r.app === latest.app && r.id !== base.id && String(r.created) > String(base.created));
+    if (!head) return { error: `${app}: nothing newer than the baseline ${base.label || base.id}. Crawl again, or pass base and head explicitly.` };
+    return { base: base.id, head: head.id };
   }
 
   diffDir(base, head) {

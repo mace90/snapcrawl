@@ -53,6 +53,12 @@ pre.code{margin:10px 0 0;padding:10px 12px;border:1px solid var(--line);border-r
 .cli{font:12px var(--mono);color:var(--mut);overflow-wrap:anywhere}.cli b{color:var(--fg);font-weight:400}
 .btn{min-height:44px;padding:0 16px;border-radius:6px;border:1px solid var(--line2);background:none;cursor:pointer;font-size:13px;display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
 .btn:hover{border-color:var(--mut)}.btn.pri{background:var(--fg);border-color:var(--fg);color:var(--bg)}.btn[disabled]{opacity:.4;cursor:not-allowed}
+.btn.sm{min-height:36px;padding:0 12px;font-size:12px}a.btn{text-decoration:none;color:var(--fg)}a.btn.pri{color:var(--bg)}
+.menu{position:relative}.menu>summary{list-style:none}.menu>summary::-webkit-details-marker{display:none}.menu[open]>summary{border-color:var(--mut)}
+.menu .pop{position:absolute;right:0;top:calc(100% + 6px);z-index:15;min-width:220px;display:grid;padding:4px;border:1px solid var(--line2);border-radius:6px;background:var(--s1)}
+.mi{display:flex;align-items:center;gap:12px;min-height:40px;padding:0 10px;border-radius:4px;color:var(--fg);text-decoration:none;font-size:13px}.mi:hover,.mi:focus-visible{background:var(--s2)}.mi small{margin-left:auto;font:11px var(--mono);color:var(--mut)}
+.done{border:1px solid color-mix(in srgb,var(--ok) 55%,transparent);border-radius:8px;padding:14px;margin-bottom:18px}.done.bad{border-color:color-mix(in srgb,var(--bad) 55%,transparent)}
+.done b{display:flex;align-items:center;gap:8px;font-weight:500}.done b i{width:7px;height:7px;background:var(--ok)}.done.bad b i{background:var(--bad)}.done p{margin:4px 0 12px;font:12px var(--mono);color:var(--mut)}
 .btn.g{border-color:color-mix(in srgb,var(--ok) 60%,transparent);color:var(--ok)}.btn.r{border-color:color-mix(in srgb,var(--bad) 60%,transparent);color:var(--bad)}
 /* workspace */
 .work{display:grid;grid-template-columns:minmax(0,1fr) 420px;height:calc(100vh - 52px - var(--hh,0px));min-height:520px}
@@ -415,7 +421,10 @@ function openCompare(headId, sel) {
   S.cmp.head = headId; S.cmp.base = (r && S.state.baselines[r.app]) || ''; S.cmp.report = null; S.cmp.sel = sel || null;
   show('compare');
 }
-document.body.addEventListener('click', (e) => { const g = e.target.closest('[data-go]'); if (g) show(g.dataset.go); });
+document.body.addEventListener('click', (e) => {
+  const g = e.target.closest('[data-go]'); if (g) show(g.dataset.go);
+  document.querySelectorAll('details.menu[open]').forEach((m) => { if (!m.contains(e.target) || e.target.closest('.mi')) m.open = false; });
+});
 $('#v-run').addEventListener('click', async (e) => {
   const o = e.target.closest('[data-open]'); if (o) return openRun(o.dataset.open);
   const b = e.target.closest('[data-run]'); if (!b) return;
@@ -441,12 +450,14 @@ es.addEventListener('notes', (e) => { const { n, total } = JSON.parse(e.data); t
 const cmpGraph = new Graph($('#cmpcanvas'), { onSelect: (id) => { S.cmp.sel = id; renderCompare(); if (innerWidth <= 900) $('#cmpside').scrollIntoView({ behavior: 'smooth' }); } });
 const doneRuns = () => (S.state?.runs || []).filter((r) => r.status === 'done');
 async function loadCompare() {
-  const C = S.cmp, runs = doneRuns(), B = S.state?.baselines || {};
-  if (!C.head) C.head = runs.find((r) => B[r.app] && B[r.app] !== r.id)?.id || '';
+  const C = S.cmp, runs = doneRuns(), B = S.state?.baselines || {}, P = S.state?.pair || {};
+  // default (same as the CLI): the newest run of an app created after its baseline; a picked head may go either way
+  if (!C.head && P.head) { C.head = P.head; C.base = P.base; }
   const headRun = runs.find((r) => r.id === C.head);
   if (headRun && !C.base) C.base = (B[headRun.app] !== headRun.id && B[headRun.app]) || runs.find((r) => r.app === headRun.app && r.id !== headRun.id)?.id || '';
   if (!headRun || !C.base) {
-    $('#cmphead').innerHTML = `<div><h1>Nothing to compare yet</h1><p class="sub">${headRun ? `Only one run of ${esc(appOf(headRun))}. ` : ''}Crawl the same app again after the next build. The first run of an app is its baseline.</p></div><button class="btn pri" data-go="setup">New crawl</button>`;
+    const why = headRun ? `Only one run of ${esc(appOf(headRun))}. Crawl the same app again after the next build.` : P.error ? esc(P.error) : 'Crawl the same app again after the next build. The first run of an app is its baseline.';
+    $('#cmphead').innerHTML = `<div><h1>Nothing to compare yet</h1><p class="sub">${why}</p></div><button class="btn pri" data-go="setup">New crawl</button>`;
     $('#cmpside').innerHTML = '<p class="hint" style="margin-top:0">Try it with sample data:</p><pre class="code">snapcrawl demo\nsnapcrawl ui</pre>';
     cmpGraph.empty('<p>Compare needs two runs of the same app.</p>');
     return;
@@ -457,6 +468,8 @@ async function loadCompare() {
   renderCompare();
 }
 const decided = (id) => S.cmp.report.review[id]?.decision;
+const exportUrl = (type) => `/api/export?base=${encodeURIComponent(S.cmp.base)}&head=${encodeURIComponent(S.cmp.head)}&type=${type}`;
+const exportMenu = () => `<details class="menu"><summary class="btn sm">Export</summary><div class="pop"><a class="mi" href="${esc(exportUrl('summary'))}" download>Summary (HTML)<small>text only</small></a><a class="mi" href="${esc(exportUrl('full'))}" download>Full report (HTML)<small>graph + images</small></a></div></details>`;
 function renderCompare() {
   const C = S.cmp, R = C.report; if (!R) return;
   const runs = doneRuns(), B = S.state.baselines || {};
@@ -471,7 +484,7 @@ function renderCompare() {
   const h1 = open.length ? `${open.length} of ${R.screens.length} screens need review` : rejected ? `Reviewed · ${rejected} rejected` : 'Reviewed · no open changes';
   $('#cmphead').innerHTML = `<div><p class="sub" style="margin:0 0 6px;color:var(--fg)">${esc(appOf(headRun))} <span style="color:var(--mut)">· ${esc(headRun.app || '')}</span></p><h1>${h1}</h1><p class="sub">base <select class="sel2" data-c="base" aria-label="baseline run">${baseSel}</select> → head <select class="sel2" data-c="head" aria-label="run to check">${headSel}</select></p></div>
     <div style="display:grid;gap:10px;justify-items:end"><div class="filters">${Object.entries(STATUS).map(([k, l]) => `<button class="fbtn${C.filter === k ? ' on' : ''}" data-f="${k}" aria-pressed="${C.filter === k}"><i class="k-${k}"></i>${l} ${R.summary[k]}</button>`).join('')}</div>
-    <div class="prog"><span>reviewed ${review.length - open.length}/${review.length}</span><span class="pb"><i style="width:${review.length ? ((review.length - open.length) / review.length) * 100 : 100}%"></i></span></div></div>`;
+    <div class="prog"><span>reviewed ${review.length - open.length}/${review.length}</span><span class="pb"><i style="width:${review.length ? ((review.length - open.length) / review.length) * 100 : 100}%"></i></span>${exportMenu()}</div></div>`;
   const nodes = R.screens.map((s) => ({ id: s.id, name: s.name, depth: s.depth, status: s.status, cls: decided(s.id) ? 'r-' + decided(s.id) : '', img: file(s.headImg || s.baseImg), placeholder: s.reason === 'crash' ? 'crash' : 'no screen', foot: s.status === 'changed' ? `Δ ${pct(s.ratio)}` : s.status === 'same' ? 'Δ 0.00 %' : s.reason || s.status }));
   const st = Object.fromEntries(R.screens.map((s) => [s.id, s.status]));
   const edges = R.edges.map((e) => ({ ...e, kind: st[e.to] === 'bad' ? 'bad' : st[e.to] === 'new' ? 'new' : '' }));
@@ -486,9 +499,11 @@ function shot(cap, img, s, marks) {
 function renderInspector() {
   const C = S.cmp, R = C.report, s = R.screens.find((x) => x.id === C.sel);
   const queue = R.screens.filter((x) => x.status !== 'same');
+  const rej = queue.filter((x) => decided(x.id) === 'rejected').length;
+  const done = queue.some((x) => !decided(x.id)) ? '' : `<div class="done${rej ? ' bad' : ''}" role="status"><b><i></i>All changes reviewed</b><p>${queue.length ? `${queue.length - rej} approved · ${rej} rejected · result ${rej ? 'failed' : 'passed'}` : 'no changes · result passed'}</p><div class="acts"><a class="btn sm pri" href="${esc(exportUrl('summary'))}" download>Summary (HTML)</a><a class="btn sm" href="${esc(exportUrl('full'))}" download>Full report (HTML)</a></div></div>`;
   const list = `<div class="sec"><h4>changes · ${queue.length}</h4><div class="qlist">${queue.map((x) => `<button class="q" data-sel="${esc(x.id)}"><i class="k-${x.status}"></i><span>${esc(x.name)}</span><small>${decided(x.id) || (x.status === 'changed' ? pct(x.ratio) : x.reason || x.status)}</small></button>`).join('') || '<p class="hint" style="padding:0 10px">No changes.</p>'}</div>
     <div class="acts" style="margin-top:12px"><button class="btn" data-c="baseline"${Object.values(S.state.baselines || {}).includes(C.head) ? ' disabled' : ''}>Make head the baseline</button>${S.state.config.ai.ready ? `<button class="btn" data-c="notes">Notes via ${esc(S.state.config.ai.provider)}</button>` : ''}</div></div>`;
-  if (!s) { $('#cmpside').innerHTML = `<p class="hint" style="margin-top:0">Select a screen. Amber, blue and red need a decision.</p>${list}`; return; }
+  if (!s) { $('#cmpside').innerHTML = `${done}<p class="hint" style="margin-top:0">Select a screen. Amber, blue and red need a decision.</p>${list}`; return; }
   const dec = decided(s.id);
   const label = dec || STATUS[s.status];
   const next = queue.find((x) => !decided(x.id) && x.id !== s.id);
@@ -502,7 +517,7 @@ function renderInspector() {
   const acts = s.status === 'same' ? '<p class="hint" style="margin:0">Identical to the baseline.</p>'
     : dec ? `<button class="btn" data-d="">Undo</button>${next ? `<button class="btn" data-sel="${esc(next.id)}">Next open →</button>` : ''}`
     : `<button class="btn g" data-d="approved">${s.status === 'bad' ? 'Accept' : 'Approve'}</button><button class="btn r" data-d="rejected">Reject</button>`;
-  $('#cmpside').innerHTML = `<div class="it"><h3>${esc(s.name)}</h3><span class="tag t-${dec || s.status}">${esc(label)}</span></div>
+  $('#cmpside').innerHTML = `${done}<div class="it"><h3>${esc(s.name)}</h3><span class="tag t-${dec || s.status}">${esc(label)}</span></div>
     <p class="path">${['start', ...s.path].map(esc).join(' → ')}</p>${images}
     <table class="kv"><tr><td>screen</td><td>${esc(s.id)}</td></tr><tr><td>status</td><td>${esc(s.reason || STATUS[s.status])}</td></tr><tr><td>pixel Δ</td><td>${pct(s.ratio)}</td></tr><tr><td>regions</td><td>${s.boxes.length}</td></tr><tr><td>elements</td><td>${s.elements ?? '–'}</td></tr>${s.size ? `<tr><td>size</td><td>${s.size[0]}×${s.size[1]}</td></tr>` : ''}</table>
     ${note ? `<div class="note"><b>note · ${esc(note.model)} · ${esc(note.verdict)}</b>${esc(note.summary)}</div>` : ''}
@@ -534,8 +549,7 @@ async function loadState() {
   try { await loadState(); } catch (e) { document.body.insertAdjacentHTML('beforeend', `<p class="hint" style="padding:20px">Cannot reach the snapcrawl server: ${esc(e.message)}</p>`); return; }
   fillSetup();
   const want = location.hash.slice(1);
-  const B = S.state.baselines || {};
-  const comparable = S.state.runs.some((r) => r.status === 'done' && B[r.app] && B[r.app] !== r.id);
+  const comparable = !!S.state.pair?.head;
   show(['setup', 'run', 'compare'].includes(want) ? want : S.state.live.running ? 'run' : comparable ? 'compare' : 'setup');
   loadDevices();
 })();

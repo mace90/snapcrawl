@@ -102,6 +102,70 @@ snapcrawl ui
 
 Every app has its own baseline, so runs of different apps are never compared with each other.
 
+When every change is decided, the inspector shows **All changes reviewed** with both export buttons. **Export** in the Compare header works at any time.
+
+## CLI workflow
+
+Everything the web UI does also works in the terminal, e.g. in CI or over SSH:
+
+| In the UI | In the terminal |
+|---|---|
+| Setup → **Start crawl** (the first run of an app is its baseline) | `snapcrawl crawl --bundle com.acme.app --label v1` |
+| Test run after a new build | `snapcrawl crawl --bundle com.acme.app --label v2 --diff` |
+| **Compare** | `snapcrawl diff` |
+| **Approve** / **Reject** / **Undo** | `snapcrawl review <screen-id\|all> <approve\|reject\|undo>` |
+| **Make head the baseline** | `snapcrawl baseline <run>` |
+| Run → list of runs | `snapcrawl runs` |
+| **Export** → Summary / Full report | `snapcrawl report` / `snapcrawl report --full` |
+
+Without arguments, `diff`, `review` and `report` (and the Compare tab) take the app of the newest run and compare its baseline with the newest run of that app created after the baseline. If nothing is newer than the baseline, they stop with `<App>: nothing newer than the baseline <label>` instead of comparing an older run. Pass `[base] [head]` run ids to compare any two runs, in either direction. Decisions are stored in the diff's `report.json`, so the UI and the CLI see the same review.
+
+A complete pass, from the baseline to the report:
+
+```bash
+# build 1 · becomes the baseline of com.acme.app
+snapcrawl crawl --bundle com.acme.app --label v2.3.0
+
+# … install build 2 …
+snapcrawl crawl --bundle com.acme.app --label v2.4.0 --diff
+
+snapcrawl review                       # changes and their decisions
+snapcrawl review s002 approve          # one screen
+snapcrawl review x007 reject           # the crash is a bug
+snapcrawl review all approve           # everything still open
+snapcrawl review x007 undo             # take a decision back
+
+snapcrawl report                       # .snapcrawl/reports/snapcrawl-acme-v2.4.0-summary.html
+snapcrawl report --full --out build/snapcrawl.html
+
+snapcrawl baseline 20261126-091500-v2.4.0   # optional: v2.4.0 is the new reference
+```
+
+`review all approve` and `review all reject` only touch screens that are still open; earlier decisions stay. `review all undo` clears every decision.
+
+## Reports
+
+`snapcrawl report` (or **Export** in the UI) writes one self-contained HTML file: no external fonts, scripts or images, so it opens offline, can be attached to a ticket or kept as a CI artifact, and prints on a light background.
+
+| | `summary` (default) | `full` (`--full`) |
+|---|---|---|
+| App, runs, device, result, counters | ✓ | ✓ |
+| Table of all screens: path, status, pixel Δ, decision, note | ✓ | ✓ |
+| Screen graph with thumbnails (drag to pan, scroll to zoom, click to jump) | | ✓ |
+| Base, head with changed regions, and pixel diff for every change | | ✓ |
+| Thumbnails of unchanged screens | | ✓ |
+| Typical size | ~15 KB | a few hundred KB to a few MB (images downscaled to 390 px) |
+
+The result at the top:
+
+| Result | When |
+|---|---|
+| **passed** | every change was reviewed and nothing was rejected (broken screens count only once approved) |
+| **failed** | at least one change was rejected, e.g. a crash or an unreachable screen that is not accepted |
+| **in review** | nothing rejected yet, but changes are still open |
+
+Unchanged screens always count as passed.
+
 ## Logins and two-factor authentication
 
 When the crawler sees a password field it logs in. Credentials come from environment variables or the config file, never from the repo:
@@ -188,7 +252,10 @@ Then `snapcrawl diff --ai`, or **Notes** in the web UI. Global settings live in 
 | `snapcrawl crawl` | explore the app · `--bundle --udid --label --max-depth --max-screens --mfa --diff` |
 | `snapcrawl runs` | list runs (◆ marks each app's baseline) |
 | `snapcrawl baseline [run]` | show baselines, or make a run the baseline of its app |
-| `snapcrawl diff [base] [head]` | compare runs (default: newest run vs its app's baseline) · `--ai` |
+| `snapcrawl diff [base] [head]` | compare runs (default: baseline vs the newest run after it) · `--ai` |
+| `snapcrawl review [base] [head]` | list the changes and their decisions |
+| `snapcrawl review <id\|all> <approve\|reject\|undo>` | decide like in the UI · `all` = every open change |
+| `snapcrawl report [base] [head]` | write an HTML report to `.snapcrawl/reports/` · `--full --out <file>` |
 | `snapcrawl ui` | local web UI · `--port --no-open` |
 | `snapcrawl demo` | create sample runs |
 | `snapcrawl config set <key> <value>` | global settings |
@@ -207,6 +274,8 @@ Then `snapcrawl diff --ai`, or **Notes** in the web UI. Global settings live in 
 ```
 .snapcrawl/
 ├── baselines.json               # baseline run per app
+├── reports/                     # exported HTML reports
+│   └── snapcrawl-<app>-<head>-<summary|full>.html
 ├── runs/<run-id>/
 │   ├── atlas.json               # screens, edges, paths, device info
 │   └── screens/s000.png …
@@ -222,7 +291,7 @@ Add `.snapcrawl/` to `.gitignore` (`snapcrawl init` does this).
 - iOS Simulator only for now. **Next:** real iPhones over USB (WebDriverAgent) and Android (adb + UiAutomator).
 - Apps with poor accessibility labels expose fewer tappable elements; a screenshot-based fallback is planned.
 - Lists with endless dynamic content can produce many similar screens; use `maxScreens` and `maxDepth`.
-- Planned: replay mode (re-run exactly the baseline paths), ignore regions per screen, static HTML report for CI artifacts.
+- Planned: replay mode (re-run exactly the baseline paths), ignore regions per screen.
 
 ## Development
 
