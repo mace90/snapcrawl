@@ -98,6 +98,11 @@ export class IosSimulator {
     await sh('xcrun', ['simctl', 'launch', this.udid, this.bundleId]);
   }
 
+  // Bring the running app back to the front without restarting it.
+  async activate() {
+    await sh('xcrun', ['simctl', 'launch', this.udid, this.bundleId]);
+  }
+
   async isRunning() {
     const out = await sh('xcrun', ['simctl', 'spawn', this.udid, 'launchctl', 'list']).catch(() => '');
     return out.includes(`UIKitApplication:${this.bundleId}`);

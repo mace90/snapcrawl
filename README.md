@@ -92,6 +92,50 @@ snapcrawl crawl --bundle com.acme.app --label v2.4.0 --diff
 snapcrawl ui
 ```
 
+## Real iPhone over USB
+
+snapcrawl can crawl a real iPhone instead of the simulator. It talks to the phone through [WebDriverAgent](https://github.com/appium/WebDriverAgent) (WDA), a small test runner from the Appium project that snapcrawl builds and installs for you.
+
+### Prerequisites (once)
+
+1. **Apple ID in Xcode.** Xcode → Settings → Accounts → **+** → Apple ID. A free Apple ID works; a paid developer account avoids the 7-day limit below.
+2. **Connect and trust.** Plug the iPhone in by USB, unlock it and tap **Trust** on "Trust This Computer?".
+3. **Developer Mode.** On the iPhone: Settings → Privacy & Security → **Developer Mode** → on, restart, confirm. (The switch only appears after the iPhone was connected to Xcode once; open Xcode → Window → Devices and Simulators if it is missing.)
+4. **Your team id** (10 characters, e.g. `AB12CD34EF`): Xcode → Settings → Accounts → your Apple ID → team, or developer.apple.com/account → Membership details. `snapcrawl wda setup` without `--team` reads it from your signing certificate when there is only one.
+
+### Run it
+
+```bash
+snapcrawl doctor                                 # checks devicectl, the iPhone, Developer Mode, WDA
+snapcrawl devices                                # simulators and USB iPhones (type column)
+
+snapcrawl wda setup --team AB12CD34EF            # download + build WDA (once, ~2 min)
+snapcrawl wda start                              # install, launch, forward port 8100
+snapcrawl apps --device "Lena's iPhone"          # bundle ids on the phone
+snapcrawl crawl --device "Lena's iPhone" --bundle com.acme.app --label v2.4.0
+snapcrawl wda stop                               # when you are done
+```
+
+The first `wda start` with a **free Apple ID** stops with "Untrusted Developer". On the iPhone open Settings → General → **VPN & Device Management** → your Apple ID → **Trust**, then run `snapcrawl wda start` again.
+
+To make the iPhone the default, set `"device": { "platform": "ios-device", "udid": "Lena's iPhone" }` in `snapcrawl.config.json`. `--udid` always means a simulator, `--device` a real iPhone. In the web UI, USB iPhones appear in the device list marked `usb`; if WDA is not running the UI shows the command to start it.
+
+How it fits together: `devicectl` (part of Xcode) finds the iPhone and lists its apps. `wda setup` clones the newest WDA release to `~/.snapcrawl/wda`, gives it your team and a unique bundle id (`com.<you>.snapcrawl.<team>.WebDriverAgentRunner`, change it with `--bundle-id`) and runs `xcodebuild build-for-testing`. `wda start` runs `xcodebuild test-without-building` in the background and forwards `127.0.0.1:8100` to port 8100 on the phone through usbmuxd, the same mechanism `iproxy` uses, built in, so libimobiledevice is not needed. Process ids go to `~/.snapcrawl/wda/pids`, logs to `~/.snapcrawl/wda/*.log`. Another WDA address can be set with `device.wdaUrl`.
+
+Screenshots from real devices are in device pixels (2x or 3x); the status bar height is measured through WDA and masked in diffs at the right pixel size.
+
+### Troubleshooting the iPhone
+
+- **`No iPhone connected`**: unlock the phone, tap Trust, try another cable or port. `xcrun devicectl list devices` should list it.
+- **`Developer Mode disabled`**: see prerequisite 3.
+- **`Untrusted Developer` / `invalid code signature`**: Settings → General → VPN & Device Management → Trust (free Apple IDs, after every new setup).
+- **Stops working after a week**: provisioning profiles of free Apple IDs expire after **7 days**. Run `snapcrawl wda setup` again.
+- **`Failed to register bundle identifier`**: the id is taken. `snapcrawl wda setup --team … --bundle-id com.<you>.<anything>.WebDriverAgentRunner`.
+- **`maximum number of apps`**: free Apple IDs may register only a few app ids per week; keep the bundle id that is already in `~/.snapcrawl/wda/setup.json`.
+- **`WebDriverAgent not reachable at http://127.0.0.1:8100`**: `snapcrawl wda status`, then `snapcrawl wda start`. Keep the iPhone unlocked while WDA starts and while it crawls; auto-lock interrupts the session (Settings → Display & Brightness → Auto-Lock → Never helps).
+- **Xcode is "preparing" the iPhone**: the first connection copies debug symbols; wait until Xcode → Window → Devices and Simulators is done.
+- The full xcodebuild output is in `~/.snapcrawl/wda/build.log` (setup) and `~/.snapcrawl/wda/xcodebuild.log` (start).
+
 ## Using the web UI
 
 `snapcrawl ui` opens the same workflow in the browser:
@@ -187,6 +231,28 @@ With `fallbackManual: true` (default), a failed automatic login also pauses for 
 
 > **Use test accounts, never production accounts.** The crawler taps everything it is allowed to tap.
 
+## Real-world apps: banners, onboarding and alerts
+
+Real apps rarely open straight on their start screen. snapcrawl handles the usual suspects:
+
+| What appears | What snapcrawl does | Setting |
+|---|---|---|
+| Onboarding sheets, "What's new", hints | Taps a dismiss button (exact label: *Alles klar, OK, Später, Nicht jetzt, Schließen, Überspringen, Got it, Not now, Maybe later, Close, Skip, …*) at start and whenever a relaunch or replay lands on an unexpected screen; up to 3 times, logged as `dismiss "…"` | `crawl.dismiss` (list of labels) |
+| Cookie and privacy banners | **Never decided automatically.** With `--prepare` you decide yourself; otherwise the screen is skipped with a warning (a banner on the start screen ends the crawl there) | `--prepare` |
+| Permission prompts (notifications, location, tracking, photos) | Answered with *Don't Allow* / *Ask App Not to Track* by default, through WebDriverAgent's alert API on iPhones and through the accessibility tree on the simulator | `crawl.systemAlerts`: `dismiss` · `accept` · `pause` |
+| Links in web content | Not tapped (`action.skip "…" (web link)`), they usually open Safari | `crawl.webLinks`: `skip` · `tap` |
+| A tap that brings Safari or another app to the front | Logged as `left app`, the app is brought back, nothing is registered (no crash node) | |
+| A replay that lands on the wrong screen | Dismiss first, then one complete restart and replay; only then the screen is skipped with a warning | `crawl.matchThreshold` |
+| Onboarding shown only on the first launch | When the app opens twice in a row on another known screen, that screen becomes the **launch screen**; the screens before it are marked *one-time* (dashed in the graph), not a warning. Paths are stored relative to the launch screen. In a diff, one-time screens are compared only when both runs have them, otherwise they show as *one-time (skipped)* | |
+
+**`--prepare`** (in the UI: *Prepare app manually before crawl*) launches the app and pauses: *Bring the app to the screen where the crawl should start, then continue.* Use it to make the cookie decision, finish onboarding or log in by hand. The screen you leave the app on becomes the root of the graph. If a later restart does not show that screen again, snapcrawl dismisses what is in the way; if a privacy banner comes back, it pauses again.
+
+```bash
+snapcrawl crawl --device "Lena's iPhone" --bundle com.acme.app --prepare
+```
+
+Warnings collected during a run are stored in `atlas.json` (`meta.warnings`).
+
 ## Safety: the blocklist
 
 Elements whose label contains a blocklisted word are never tapped. Defaults: `log out`, `sign out`, `delete account`, `buy`, `purchase`, `pay now`, plus German equivalents. Extend it per app in `crawl.blocklist`. Skipped actions are logged as `action.skip`.
@@ -206,17 +272,25 @@ Elements whose label contains a blocklisted word are never tapped. Defaults: `lo
     "totpSecret": "env:SNAPCRAWL_TOTP_SECRET",
     "fallbackManual": true
   },
-  "crawl": { "maxDepth": 8, "maxScreens": 200, "timeLimitMin": 20, "blocklist": ["log out", "delete account", "buy"] },
+  "crawl": { "maxDepth": 8, "maxScreens": 200, "timeLimitMin": 20, "blocklist": ["log out", "delete account", "buy"], "systemAlerts": "dismiss" },
   "diff": { "threshold": 0.1, "minChangedRatio": 0.0005, "ignoreStatusBar": true }
 }
 ```
 
 | Key | Default | Meaning |
 |---|---|---|
+| `device.platform` | `ios-sim` | `ios-sim` (simulator) or `ios-device` (iPhone over USB) |
+| `device.udid` | `booted` | simulator or iPhone, by udid or name |
+| `device.wdaUrl` | `http://127.0.0.1:8100` | WebDriverAgent address for `ios-device` |
 | `crawl.maxDepth` | `8` | taps away from the first screen |
 | `crawl.maxScreens` | `200` | stop after this many screens |
 | `crawl.timeLimitMin` | `20` | stop after this many minutes |
 | `crawl.settleMs` | `900` | wait after each tap before reading the screen |
+| `crawl.matchThreshold` | `0.8` | similarity (0–1) from which two views count as the same screen |
+| `crawl.prepare` | `false` | pause after launch for manual preparation (`--prepare`) |
+| `crawl.dismiss` | DE + EN list | button labels that close onboarding sheets and hints |
+| `crawl.systemAlerts` | `dismiss` | permission prompts: `dismiss`, `accept` or `pause` |
+| `crawl.webLinks` | `skip` | links in web content: `skip` or `tap` |
 | `diff.threshold` | `0.1` | per-pixel colour tolerance (0–1) |
 | `diff.minChangedRatio` | `0.0005` | share of changed pixels below which a screen counts as unchanged |
 | `diff.ignoreStatusBar` | `true` | masks the clock and battery area |
@@ -246,10 +320,10 @@ Then `snapcrawl diff --ai`, or **Notes** in the web UI. Global settings live in 
 | Command | |
 |---|---|
 | `snapcrawl doctor` | check Xcode, idb, simulator, config |
-| `snapcrawl devices` | list simulators |
-| `snapcrawl apps` | list apps on the booted simulator |
+| `snapcrawl devices` | list simulators and USB iPhones |
+| `snapcrawl apps` | list apps on the booted simulator · `--device` for an iPhone |
 | `snapcrawl init` | write `snapcrawl.config.json` |
-| `snapcrawl crawl` | explore the app · `--bundle --udid --label --max-depth --max-screens --mfa --diff` |
+| `snapcrawl crawl` | explore the app · `--bundle --udid --device --label --max-depth --max-screens --mfa --prepare --diff` |
 | `snapcrawl runs` | list runs (◆ marks each app's baseline) |
 | `snapcrawl baseline [run]` | show baselines, or make a run the baseline of its app |
 | `snapcrawl diff [base] [head]` | compare runs (default: baseline vs the newest run after it) · `--ai` |
@@ -259,13 +333,15 @@ Then `snapcrawl diff --ai`, or **Notes** in the web UI. Global settings live in 
 | `snapcrawl ui` | local web UI · `--port --no-open` |
 | `snapcrawl demo` | create sample runs |
 | `snapcrawl config set <key> <value>` | global settings |
+| `snapcrawl wda setup --team <id>` | build WebDriverAgent for the connected iPhone · `--bundle-id` |
+| `snapcrawl wda start` / `stop` / `status` | run WebDriverAgent on the iPhone with port forwarding · `--udid` |
 
 `snapcrawl diff` exits with code `1` when screens crashed or became unreachable, so it can fail a CI job.
 
 ## How it works
 
 1. **Explore.** After launch (and login), the crawler reads the accessibility tree with `idb ui describe-all`, collects tappable elements (buttons, cells, tabs, links), and explores breadth-first. To get back to a screen it taps *Back* or relaunches the app and replays the taps that led there.
-2. **Identify screens.** A screen's identity is a fingerprint of its accessibility structure, with numbers masked, so a clock or a counter does not create a "new" screen.
+2. **Identify screens.** A screen's identity is a fingerprint of its accessibility structure, with numbers masked, so a clock or a counter does not create a "new" screen. Web content inside the app (ad banners, embedded pages) is left out, so a rotating banner does not either. When the fingerprint differs, a **signature** decides: the stable parts of a screen (navigation bar title, selected tab, buttons, toolbar, layout) count, feed texts in cells, numbers, dates and ads count little or not at all. Two views are the same screen from a similarity of `crawl.matchThreshold` (0.8); a different navigation bar title always means a different screen. The same rule is used for replays (every step is checked and logged as `replay s002 ok · match 0.91`) and for matching screens between two runs. Screens are named after the navigation bar title, else the selected tab, else the first large text near the top, else the action that led there; repeated names get " (2)", " (3)".
 3. **Detect crashes.** After every tap snapcrawl checks whether the app process is still alive and records a crash node in the graph.
 4. **Compare.** Screens of two runs are matched by the path of taps that reached them, then by fingerprint. Matched screenshots are compared with [pixelmatch](https://github.com/mapbox/pixelmatch); changed pixels are grouped into regions. Screens only in the new run are *new*; screens only in the baseline are *unreachable*.
 
@@ -288,7 +364,7 @@ Add `.snapcrawl/` to `.gitignore` (`snapcrawl init` does this).
 
 ## Limitations and roadmap
 
-- iOS Simulator only for now. **Next:** real iPhones over USB (WebDriverAgent) and Android (adb + UiAutomator).
+- iOS Simulator and iPhones over USB. **Next:** Android (adb + UiAutomator).
 - Apps with poor accessibility labels expose fewer tappable elements; a screenshot-based fallback is planned.
 - Lists with endless dynamic content can produce many similar screens; use `maxScreens` and `maxDepth`.
 - Planned: replay mode (re-run exactly the baseline paths), ignore regions per screen.
@@ -300,7 +376,7 @@ npm install
 npm test          # runs the crawler against a scripted fake app; no Xcode needed
 ```
 
-Drivers implement one small interface (`resolve`, `listApps`, `launch`, `isRunning`, `elements`, `tap`, `type`, `screenshot`), see `src/drivers/ios-sim.js` and `test/fake-app.js`.
+Drivers implement one small interface (`resolve`, `listApps`, `launch`, `isRunning`, `elements`, `tap`, `type`, `screenshot`), see `src/drivers/ios-sim.js`, `src/drivers/ios-device.js` and `test/fake-app.js`. `test/fake-wda.js` serves the fake app as a WebDriverAgent, so the iPhone driver and the port forwarder are tested without a phone.
 
 ## Troubleshooting
 

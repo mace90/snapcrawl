@@ -5,7 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { annotate, aiReady } from './ai.js';
 import { crawl } from './crawler.js';
 import { buildReport } from './diff.js';
-import { IosSimulator, hasBinary, listSimulators } from './drivers/ios-sim.js';
+import { makeDriver } from './drivers/index.js';
+import { DEFAULT_WDA_URL, Wda, listDevices } from './drivers/ios-device.js';
+import { hasBinary, listSimulators } from './drivers/ios-sim.js';
+import { readSetup } from './wda.js';
 import { REPORT_TYPES, renderReport, reportFileName, setDecision } from './report.js';
 
 const UI = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'ui', 'index.html');
@@ -32,7 +35,7 @@ const readBody = (req) =>
     });
   });
 
-export function startServer({ store, cfg, port = 4747, version, driverFactory = (o) => new IosSimulator(o) }) {
+export function startServer({ store, cfg, port = 4747, version, driverFactory = makeDriver }) {
   const clients = new Set();
   const live = { running: false, runId: null, ask: null, log: [], abort: false };
 
@@ -71,7 +74,11 @@ export function startServer({ store, cfg, port = 4747, version, driverFactory = 
         error = e.message;
       }
     } else error = 'xcrun not found: Snapcrawl needs macOS with Xcode for the iOS Simulator.';
-    return { tools, sims, error };
+    // real iPhones over USB, and whether WebDriverAgent answers for them
+    const url = cfg.device.wdaUrl || DEFAULT_WDA_URL;
+    const usb = tools.xcrun ? await listDevices().catch(() => []) : [];
+    const wda = { url, built: !!readSetup(), reachable: usb.length ? !!(await new Wda(url).status(2000).catch(() => null)) : false };
+    return { tools, sims, usb, wda, error };
   }
 
   const routes = {
@@ -88,15 +95,15 @@ export function startServer({ store, cfg, port = 4747, version, driverFactory = 
         mfa: cfg.auth.mfa,
         hasTotp: !!cfg.auth.totpSecret,
         fallbackManual: cfg.auth.fallbackManual,
-        crawl: { maxDepth: cfg.crawl.maxDepth, maxScreens: cfg.crawl.maxScreens, timeLimitMin: cfg.crawl.timeLimitMin, blocklist: cfg.crawl.blocklist },
+        crawl: { maxDepth: cfg.crawl.maxDepth, maxScreens: cfg.crawl.maxScreens, timeLimitMin: cfg.crawl.timeLimitMin, blocklist: cfg.crawl.blocklist, prepare: !!cfg.crawl.prepare },
         ai: { provider: cfg.ai.provider, model: cfg.ai.model, ready: aiReady(cfg.ai) },
         file: cfg._file,
       },
     }),
     'GET /api/devices': devices,
     'GET /api/apps': async (q) => {
-      const d = new IosSimulator({ udid: q.get('udid') || 'booted' });
-      await d.resolve();
+      const d = makeDriver({ platform: q.get('type') === 'device' ? 'ios-device' : 'ios-sim', udid: q.get('udid') || '', wdaUrl: cfg.device.wdaUrl });
+      await (d.findDevice ? d.findDevice() : d.resolve());
       return { apps: await d.listApps() };
     },
     'GET /api/run': (q) => store.readRun(q.get('id')),
@@ -130,7 +137,8 @@ export function startServer({ store, cfg, port = 4747, version, driverFactory = 
       if (!run.app.bundleId) throw Object.assign(new Error('Pick an app (bundle id) first'), { status: 400 });
       Object.assign(run.auth, Object.fromEntries(Object.entries(body.auth || {}).filter(([, v]) => v !== '' && v !== undefined)));
       Object.assign(run.crawl, Object.fromEntries(Object.entries(body.crawl || {}).filter(([, v]) => v !== '' && v !== undefined)));
-      const driver = driverFactory({ udid: body.udid || run.device.udid, bundleId: run.app.bundleId });
+      const platform = body.platform || run.device.platform;
+      const driver = driverFactory({ platform, udid: body.udid || (platform === run.device.platform ? run.device.udid : ''), bundleId: run.app.bundleId, wdaUrl: run.device.wdaUrl });
       Object.assign(live, { running: true, runId: null, ask: null, log: [], abort: false });
       crawl({ driver, cfg: run, store, io, label: body.label || '' })
         .then((atlas) => {
