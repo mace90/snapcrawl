@@ -50,7 +50,7 @@ brew install pipx && pipx install fb-idb              # idb client
 ## Install
 
 ```bash
-npm install -g github:<your-user>/snapcrawl
+npm install -g github:mace90/snapcrawl
 snapcrawl doctor
 ```
 
@@ -59,7 +59,7 @@ snapcrawl doctor
 Or from a clone:
 
 ```bash
-git clone https://github.com/<your-user>/snapcrawl && cd snapcrawl
+git clone https://github.com/mace90/snapcrawl && cd snapcrawl
 npm install && npm link
 ```
 
