@@ -82,7 +82,7 @@ pre.code{margin:10px 0 0;padding:10px 12px;border:1px solid var(--line);border-r
 .nn{font-size:11.5px;font-weight:500;fill:var(--fg)}.nf{font:9.5px var(--mono);fill:var(--dim)}
 .sq{fill:var(--dim)}.s-same .sq{fill:var(--ok)}.s-changed .sq{fill:var(--chg)}.s-new .sq{fill:var(--new)}.s-bad .sq{fill:var(--bad)}.s-live .sq{fill:var(--fg)}
 .s-changed .nb{stroke:color-mix(in srgb,var(--chg) 55%,var(--line2))}.s-new .nb{stroke:color-mix(in srgb,var(--new) 55%,var(--line2))}.s-bad .nb{stroke:color-mix(in srgb,var(--bad) 60%,var(--line2))}
-.r-approved .sq{fill:var(--ok)}.r-rejected .nb{stroke:var(--bad);stroke-dasharray:4 3}
+.r-approved .sq{fill:var(--ok)}.r-rejected .nb{stroke:var(--bad);stroke-dasharray:4 3}.one .nb{stroke-dasharray:5 4}.s-skipped .sq{fill:var(--dim)}.t-skipped{color:var(--dim)}
 .ph{fill:#141414}.pht{font:10px var(--mono);fill:#6a6a6a}
 .port{fill:var(--bg);stroke:#4a4a4a}
 .node.pop{animation:pop .4s ease-out}@keyframes pop{from{opacity:0}}
@@ -110,7 +110,7 @@ table.kv{width:100%;border-collapse:collapse;font:12px var(--mono);margin:16px 0
 .qlist{display:grid;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:6px;overflow:hidden}
 .q{display:grid;grid-template-columns:8px minmax(0,1fr) auto;gap:10px;align-items:center;min-height:40px;padding:6px 10px;border:0;background:var(--bg);cursor:pointer;text-align:left;font-size:13px}
 .q:hover{background:var(--s1)}.q.on{background:var(--s2)}.q i.base{background:var(--ok)}.q i.plain{background:var(--line2)}.q i{width:7px;height:7px}.q small{font:11px var(--mono);color:var(--mut)}
-.k-same{background:var(--ok)}.k-changed{background:var(--chg)}.k-new{background:var(--new)}.k-bad{background:var(--bad)}
+.k-skipped{background:var(--dim)}.k-same{background:var(--ok)}.k-changed{background:var(--chg)}.k-new{background:var(--new)}.k-bad{background:var(--bad)}
 .filters{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .fbtn{display:inline-flex;align-items:center;gap:8px;min-height:36px;padding:0 10px;border:1px solid var(--line2);border-radius:6px;background:none;cursor:pointer;font:12px var(--mono);color:var(--mut)}
 .fbtn i{width:7px;height:7px}.fbtn.on{color:var(--fg);border-color:var(--fg)}
@@ -156,6 +156,7 @@ table.kv{width:100%;border-collapse:collapse;font:12px var(--mono);margin:16px 0
     <section class="blk"><h2><span>04</span>Limits</h2>
       <div class="grid3"><label class="fl"><span>max depth</span><input class="in mono" id="depth" type="number" min="1"></label><label class="fl"><span>max screens</span><input class="in mono" id="maxs" type="number" min="1"></label><label class="fl"><span>minutes</span><input class="in mono" id="mins" type="number" min="1"></label></div>
       <label class="fl"><span>blocklist · elements containing these words are never tapped</span><textarea class="in" id="block" spellcheck="false"></textarea></label>
+      <label class="chk"><input type="checkbox" id="prepare">Prepare app manually before crawl (cookie banner, onboarding, start screen)</label>
     </section>
   </div>
   <div class="foot"><div><span class="cli" id="cli"></span><p class="sub" id="basehint"></p></div><button class="btn pri" id="start">Start crawl</button></div>
@@ -272,9 +273,10 @@ class Graph {
 }
 
 /* ---------- state ---------- */
-const S = { state: null, devices: null, udid: '', mfa: 'none', view: 'setup', run: null, live: { id: null, atlas: null, log: [], ask: null, running: false, lastTap: null }, cmp: { base: '', head: '', report: null, sel: null, filter: null, mode: 'side', marks: true } };
+const S = { state: null, devices: null, udid: '', dtype: 'sim', mfa: 'none', view: 'setup', run: null, live: { id: null, atlas: null, log: [], ask: null, running: false, lastTap: null }, cmp: { base: '', head: '', report: null, sel: null, filter: null, mode: 'side', marks: true } };
 const MFA = [['none', 'none'], ['totp', 'totp'], ['prompt', 'prompt'], ['manual', 'manual']];
-const STATUS = { same: 'same', changed: 'changed', new: 'new', bad: 'broken' };
+const STATUS = { same: 'same', changed: 'changed', new: 'new', bad: 'broken', skipped: 'one-time' };
+const needsReview = (s) => s.status !== 'same' && s.status !== 'skipped';
 
 function show(v) {
   S.view = v;
@@ -291,28 +293,39 @@ document.querySelectorAll('.tab').forEach((t) => (t.onclick = () => show(t.datas
 async function loadDevices() {
   try { S.devices = await api('/api/devices'); } catch (e) { S.devices = { sims: [], tools: {}, error: e.message }; }
   const d = S.devices, booted = d.sims.find((s) => s.state === 'Booted');
-  S.udid ||= booted?.udid || '';
-  $('#sdot').className = 'dot' + (d.tools.idb && booted ? ' on' : '');
-  $('#stxt').textContent = !d.tools.xcrun ? 'xcrun not found' : !d.tools.idb ? 'idb not found' : booted ? `${booted.name} · booted` : 'no simulator booted';
+  d.usb ||= []; d.wda ||= {};
+  if (!S.udid) { if (booted) S.udid = booted.udid; else if (d.usb[0]) { S.udid = d.usb[0].udid; S.dtype = 'device'; } }
+  const usb = S.dtype === 'device' && d.usb.find((x) => x.udid === S.udid);
+  $('#sdot').className = 'dot' + (usb ? (d.wda.reachable ? ' on' : ' busy') : d.tools.idb && booted ? ' on' : '');
+  $('#stxt').textContent = usb ? `${usb.name} · usb · ${d.wda.reachable ? 'WebDriverAgent ready' : 'WebDriverAgent not running'}` : !d.tools.xcrun ? 'xcrun not found' : !d.tools.idb ? 'idb not found' : booted ? `${booted.name} · booted` : 'no simulator booted';
   renderDevices();
   loadApps();
 }
 function renderDevices() {
   const d = S.devices;
-  $('#devs').innerHTML = d.sims.length ? d.sims.slice(0, 8).map((s) => `<button class="row${S.udid === s.udid ? ' on' : ''}" data-udid="${esc(s.udid)}"><span class="r"></span><span>${esc(s.name)}<br><small>${esc(s.runtime)}</small></span><small>${s.state === 'Booted' ? '● booted' : esc(s.state.toLowerCase())}</small></button>`).join('') : '<div class="row" style="cursor:default"><span></span><span class="mono" style="color:var(--mut);font-size:12px">no simulators found</span><span></span></div>';
+  const usbRows = d.usb.map((u) => `<button class="row${S.udid === u.udid ? ' on' : ''}" data-udid="${esc(u.udid)}" data-type="device"><span class="r"></span><span>${esc(u.name)} <span class="tag">${u.transport === 'wired' ? 'usb' : 'wi-fi'}</span><br><small>iOS ${esc(u.ios)}${u.model && u.model !== u.name ? ' · ' + esc(u.model) : ''}</small></span><small>${!u.paired ? 'not trusted' : d.wda.reachable ? '● WDA ready' : 'WDA off'}</small></button>`);
+  const simRows = d.sims.slice(0, 8).map((s) => `<button class="row${S.udid === s.udid ? ' on' : ''}" data-udid="${esc(s.udid)}" data-type="sim"><span class="r"></span><span>${esc(s.name)} <span class="tag">sim</span><br><small>${esc(s.runtime)}</small></span><small>${s.state === 'Booted' ? '● booted' : esc(s.state.toLowerCase())}</small></button>`);
+  $('#devs').innerHTML = [...usbRows, ...simRows].join('') || '<div class="row" style="cursor:default"><span></span><span class="mono" style="color:var(--mut);font-size:12px">no simulators or iPhones found</span><span></span></div>';
   const msgs = [];
+  const usb = S.dtype === 'device' && d.usb.find((x) => x.udid === S.udid);
   if (d.error) msgs.push(`<p class="hint">${esc(d.error)}</p>`);
-  if (!d.tools.idb) msgs.push(`<pre class="code">brew tap facebook/fb && brew install idb-companion\npipx install fb-idb</pre>`);
-  if (d.tools.xcrun && !d.sims.some((s) => s.state === 'Booted')) msgs.push(`<pre class="code">xcrun simctl boot "iPhone 16" && open -a Simulator</pre>`);
-  msgs.push('<p class="hint">Unbooted simulators are booted on start. Real devices: planned.</p>');
+  if (usb) {
+    if (!usb.paired) msgs.push('<p class="hint">Unlock the iPhone and tap Trust.</p>');
+    if (!d.wda.reachable) msgs.push(`<p class="hint">WebDriverAgent is not running at ${esc(d.wda.url)}. Start it in a terminal${d.wda.built ? '' : ' (build it once first)'}:</p><pre class="code">${d.wda.built ? '' : 'snapcrawl wda setup --team &lt;TEAM_ID&gt;\n'}snapcrawl wda start --udid "${esc(usb.name)}"</pre>`);
+  } else {
+    if (!d.tools.idb) msgs.push(`<pre class="code">brew tap facebook/fb && brew install idb-companion\npipx install fb-idb</pre>`);
+    if (d.tools.xcrun && !d.sims.some((s) => s.state === 'Booted')) msgs.push(`<pre class="code">xcrun simctl boot "iPhone 16" && open -a Simulator</pre>`);
+  }
+  msgs.push('<p class="hint">Unbooted simulators are booted on start. iPhones over USB need WebDriverAgent (snapcrawl wda setup, then wda start).</p>');
   $('#devmsg').innerHTML = msgs.join('');
 }
 async function loadApps() {
   const sel = $('#appsel');
-  if (!S.udid || !S.devices?.tools.idb) { sel.innerHTML = '<option value="">boot a simulator to list apps</option>'; return; }
+  const dev = S.dtype === 'device';
+  if (!S.udid || (!dev && !S.devices?.tools.idb)) { sel.innerHTML = '<option value="">boot a simulator to list apps</option>'; return; }
   sel.innerHTML = '<option value="">loading…</option>';
   try {
-    const { apps } = await api('/api/apps?udid=' + encodeURIComponent(S.udid));
+    const { apps } = await api('/api/apps?udid=' + encodeURIComponent(S.udid) + (dev ? '&type=device' : ''));
     sel.innerHTML = '<option value="">choose an app</option>' + apps.map((a) => `<option value="${esc(a.bundleId)}"${a.bundleId === $('#bundle').value ? ' selected' : ''}>${esc(a.name)} · ${esc(a.bundleId)}${a.type === 'system' ? ' (system)' : ''}</option>`).join('');
   } catch (e) { sel.innerHTML = `<option value="">${esc(e.message.slice(0, 80))}</option>`; }
 }
@@ -322,12 +335,14 @@ function renderMfa() {
   renderCli();
 }
 function renderCli() {
-  const sim = S.devices?.sims.find((s) => s.udid === S.udid);
+  const sim = S.devices?.sims.find((s) => s.udid === S.udid), usb = S.devices?.usb?.find((s) => s.udid === S.udid);
   const parts = ['snapcrawl crawl', `--bundle <b>${esc($('#bundle').value || '<bundle-id>')}</b>`];
-  if (sim) parts.push(`--udid "${esc(sim.name)}"`);
+  if (S.dtype === 'device' && usb) parts.push(`--device "${esc(usb.name)}"`);
+  else if (sim) parts.push(`--udid "${esc(sim.name)}"`);
   if (S.mfa !== 'none') parts.push(`--mfa ${S.mfa}`);
   if ($('#depth').value) parts.push(`--max-depth ${esc($('#depth').value)}`);
   if ($('#label').value) parts.push(`--label ${esc($('#label').value)}`);
+  if ($('#prepare').checked) parts.push('--prepare');
   $('#cli').innerHTML = '$ ' + parts.join(' ');
   const bid = $('#bundle').value.trim();
   const b = bid && S.state?.baselines?.[bid] && S.state.runs.find((r) => r.id === S.state.baselines[bid]);
@@ -343,20 +358,21 @@ function fillSetup() {
   $('#fallback').checked = c.fallbackManual !== false;
   $('#depth').value = c.crawl.maxDepth; $('#maxs').value = c.crawl.maxScreens; $('#mins').value = c.crawl.timeLimitMin;
   $('#block').value = c.crawl.blocklist.join(', ');
+  $('#prepare').checked = !!c.crawl.prepare;
   renderMfa();
 }
 $('#v-setup').addEventListener('click', (e) => {
   const b = e.target.closest('button'); if (!b) return;
-  if (b.dataset.udid) { S.udid = b.dataset.udid; renderDevices(); loadApps(); renderCli(); }
+  if (b.dataset.udid) { S.udid = b.dataset.udid; S.dtype = b.dataset.type || 'sim'; loadDevices(); renderCli(); }
   if (b.dataset.mfa) { S.mfa = b.dataset.mfa; renderMfa(); }
 });
 $('#v-setup').addEventListener('input', renderCli);
 $('#appsel').addEventListener('change', (e) => { if (e.target.value) { $('#bundle').value = e.target.value; renderCli(); } });
 $('#start').onclick = async () => {
   const body = {
-    udid: S.udid, bundleId: $('#bundle').value.trim(), label: $('#label').value.trim(),
+    udid: S.udid, platform: S.dtype === 'device' ? 'ios-device' : 'ios-sim', bundleId: $('#bundle').value.trim(), label: $('#label').value.trim(),
     auth: { username: $('#user').value, password: $('#pass').value, mfa: S.mfa, totpSecret: $('#totp').value.trim(), fallbackManual: $('#fallback').checked },
-    crawl: { maxDepth: +$('#depth').value || undefined, maxScreens: +$('#maxs').value || undefined, timeLimitMin: +$('#mins').value || undefined, blocklist: $('#block').value.split(',').map((s) => s.trim()).filter(Boolean) },
+    crawl: { maxDepth: +$('#depth').value || undefined, maxScreens: +$('#maxs').value || undefined, timeLimitMin: +$('#mins').value || undefined, blocklist: $('#block').value.split(',').map((s) => s.trim()).filter(Boolean), prepare: $('#prepare').checked },
   };
   try { await api('/api/crawl', body); S.live = { id: null, atlas: null, log: [], logRun: null, ask: null, running: true }; runGraph.fitted = false; show('run'); }
   catch (e) { toast(e.message); }
@@ -393,14 +409,14 @@ function renderRun() {
   let mirror = '<div class="frame"><div class="noimg">waiting</div></div>';
   if (a) {
     const last = [...a.screens].reverse().find((s) => s.screenshot);
-    const nodes = a.screens.map((s) => ({ id: s.id, name: s.name, depth: s.depth, status: s.crash ? 'bad' : 'live', img: s.screenshot ? file(`runs/${a.meta.id}/${s.screenshot}`) : null, placeholder: 'crash', foot: s.crash ? 'crash' : `${s.elements} el · ${s.actions?.length ?? 0} act` }));
+    const nodes = a.screens.map((s) => ({ id: s.id, name: s.name, depth: s.depth, status: s.crash ? 'bad' : 'live', cls: s.oneTime ? 'one' : '', img: s.screenshot ? file(`runs/${a.meta.id}/${s.screenshot}`) : null, placeholder: 'crash', foot: s.crash ? 'crash' : s.oneTime ? 'one-time' : s.launch ? `launch screen · ${s.actions?.length ?? 0} act` : `${s.elements} el · ${s.actions?.length ?? 0} act` }));
     const edges = a.edges.map((e) => ({ from: e.from, to: e.to, label: e.label, kind: a.screens.find((s) => s.id === e.to)?.crash ? 'bad' : '' }));
     const le = a.edges.at(-1);
     runGraph.render(nodes, edges, { fresh: L.running ? last?.id : null, freshEdge: L.running && le ? le.from + '>' + le.to : null, legend: '<span><i style="background:#ededed"></i>screen</span><span><i style="background:var(--bad)"></i>crash</span>' });
     if (L.running && a.screens.length <= 2) runGraph.fit();
     if (last) mirror = `<div class="frame"><img alt="latest screen" src="${file(`runs/${a.meta.id}/${last.screenshot}`)}"></div>`;
   } else runGraph.empty('<p>Starting…</p>');
-  const ask = L.ask ? `<div class="ask"><p>${esc(L.ask.prompt)}</p>${L.ask.kind === 'code' ? '<div class="r2"><input class="in" id="code" inputmode="numeric" autocomplete="one-time-code" placeholder="000000" aria-label="2FA code"><button class="btn pri" data-run="answer">Submit</button></div>' : '<button class="btn pri" data-run="answer">I am logged in · continue</button>'}</div>` : '';
+  const ask = L.ask ? `<div class="ask"><p>${esc(L.ask.prompt)}</p>${L.ask.kind === 'code' ? '<div class="r2"><input class="in" id="code" inputmode="numeric" autocomplete="one-time-code" placeholder="000000" aria-label="2FA code"><button class="btn pri" data-run="answer">Submit</button></div>' : '<button class="btn pri" data-run="answer">Continue</button>'}</div>` : '';
   const showLog = L.log.length && (L.running || L.logRun === a?.meta.id);
   const t0 = L.log[0]?.t || Date.now();
   const elapsed = a?.meta.durationMs ?? (L.log.at(-1)?.t || t0) - t0;
@@ -479,16 +495,16 @@ function renderCompare() {
   const apps = [...new Set(runs.map((r) => r.app))];
   const headSel = apps.map((app) => `<optgroup label="${esc(appOf(runs.find((r) => r.app === app)))}">${runs.filter((r) => r.app === app).map((r) => opt(r, C.head)).join('')}</optgroup>`).join('');
   const baseSel = same.filter((r) => r.id !== C.head).map((r) => opt(r, C.base)).join('');
-  const review = R.screens.filter((s) => s.status !== 'same'), open = review.filter((s) => !decided(s.id));
+  const review = R.screens.filter(needsReview), open = review.filter((s) => !decided(s.id));
   const rejected = review.filter((s) => decided(s.id) === 'rejected').length;
   const h1 = open.length ? `${open.length} of ${R.screens.length} screens need review` : rejected ? `Reviewed · ${rejected} rejected` : 'Reviewed · no open changes';
   $('#cmphead').innerHTML = `<div><p class="sub" style="margin:0 0 6px;color:var(--fg)">${esc(appOf(headRun))} <span style="color:var(--mut)">· ${esc(headRun.app || '')}</span></p><h1>${h1}</h1><p class="sub">base <select class="sel2" data-c="base" aria-label="baseline run">${baseSel}</select> → head <select class="sel2" data-c="head" aria-label="run to check">${headSel}</select></p></div>
-    <div style="display:grid;gap:10px;justify-items:end"><div class="filters">${Object.entries(STATUS).map(([k, l]) => `<button class="fbtn${C.filter === k ? ' on' : ''}" data-f="${k}" aria-pressed="${C.filter === k}"><i class="k-${k}"></i>${l} ${R.summary[k]}</button>`).join('')}</div>
+    <div style="display:grid;gap:10px;justify-items:end"><div class="filters">${Object.entries(STATUS).filter(([k]) => k !== 'skipped' || R.summary.skipped).map(([k, l]) => `<button class="fbtn${C.filter === k ? ' on' : ''}" data-f="${k}" aria-pressed="${C.filter === k}"><i class="k-${k}"></i>${l} ${R.summary[k]}</button>`).join('')}</div>
     <div class="prog"><span>reviewed ${review.length - open.length}/${review.length}</span><span class="pb"><i style="width:${review.length ? ((review.length - open.length) / review.length) * 100 : 100}%"></i></span>${exportMenu()}</div></div>`;
-  const nodes = R.screens.map((s) => ({ id: s.id, name: s.name, depth: s.depth, status: s.status, cls: decided(s.id) ? 'r-' + decided(s.id) : '', img: file(s.headImg || s.baseImg), placeholder: s.reason === 'crash' ? 'crash' : 'no screen', foot: s.status === 'changed' ? `Δ ${pct(s.ratio)}` : s.status === 'same' ? 'Δ 0.00 %' : s.reason || s.status }));
+  const nodes = R.screens.map((s) => ({ id: s.id, name: s.name, depth: s.depth, status: s.status, cls: [decided(s.id) ? 'r-' + decided(s.id) : '', s.oneTime ? 'one' : ''].join(' ').trim(), img: file(s.headImg || s.baseImg), placeholder: s.reason === 'crash' ? 'crash' : 'no screen', foot: s.status === 'changed' ? `Δ ${pct(s.ratio)}` : s.status === 'same' ? 'Δ 0.00 %' : s.reason || s.status }));
   const st = Object.fromEntries(R.screens.map((s) => [s.id, s.status]));
   const edges = R.edges.map((e) => ({ ...e, kind: st[e.to] === 'bad' ? 'bad' : st[e.to] === 'new' ? 'new' : '' }));
-  cmpGraph.render(nodes, edges, { sel: C.sel, dim: C.filter ? (x) => (x.to ? st[x.to] : x.status) !== C.filter : null, legend: Object.entries(STATUS).map(([k, l]) => `<span><i class="k-${k}"></i>${l}</span>`).join('') });
+  cmpGraph.render(nodes, edges, { sel: C.sel, dim: C.filter ? (x) => (x.to ? st[x.to] : x.status) !== C.filter : null, legend: Object.entries(STATUS).filter(([k]) => k !== 'skipped' || R.summary.skipped).map(([k, l]) => `<span><i class="k-${k}"></i>${l}</span>`).join('') });
   renderInspector();
 }
 function shot(cap, img, s, marks) {
@@ -498,7 +514,7 @@ function shot(cap, img, s, marks) {
 }
 function renderInspector() {
   const C = S.cmp, R = C.report, s = R.screens.find((x) => x.id === C.sel);
-  const queue = R.screens.filter((x) => x.status !== 'same');
+  const queue = R.screens.filter(needsReview);
   const rej = queue.filter((x) => decided(x.id) === 'rejected').length;
   const done = queue.some((x) => !decided(x.id)) ? '' : `<div class="done${rej ? ' bad' : ''}" role="status"><b><i></i>All changes reviewed</b><p>${queue.length ? `${queue.length - rej} approved · ${rej} rejected · result ${rej ? 'failed' : 'passed'}` : 'no changes · result passed'}</p><div class="acts"><a class="btn sm pri" href="${esc(exportUrl('summary'))}" download>Summary (HTML)</a><a class="btn sm" href="${esc(exportUrl('full'))}" download>Full report (HTML)</a></div></div>`;
   const list = `<div class="sec"><h4>changes · ${queue.length}</h4><div class="qlist">${queue.map((x) => `<button class="q" data-sel="${esc(x.id)}"><i class="k-${x.status}"></i><span>${esc(x.name)}</span><small>${decided(x.id) || (x.status === 'changed' ? pct(x.ratio) : x.reason || x.status)}</small></button>`).join('') || '<p class="hint" style="padding:0 10px">No changes.</p>'}</div>
@@ -515,6 +531,7 @@ function renderInspector() {
   } else images = `<div class="pair">${shot('base · ' + esc(R.base.label || R.base.id), s.baseImg, s, false)}${shot('head · ' + esc(R.head.label || R.head.id), s.headImg, s, false)}</div>`;
   const note = R.notes[s.id];
   const acts = s.status === 'same' ? '<p class="hint" style="margin:0">Identical to the baseline.</p>'
+    : s.status === 'skipped' ? '<p class="hint" style="margin:0">Shown only once (e.g. onboarding) and not in both runs, so it is not compared.</p>'
     : dec ? `<button class="btn" data-d="">Undo</button>${next ? `<button class="btn" data-sel="${esc(next.id)}">Next open →</button>` : ''}`
     : `<button class="btn g" data-d="approved">${s.status === 'bad' ? 'Accept' : 'Approve'}</button><button class="btn r" data-d="rejected">Reject</button>`;
   $('#cmpside').innerHTML = `${done}<div class="it"><h3>${esc(s.name)}</h3><span class="tag t-${dec || s.status}">${esc(label)}</span></div>

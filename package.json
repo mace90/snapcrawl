@@ -1,6 +1,6 @@
 {
   "name": "snapcrawl",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Crawl your iOS app, map every screen as a graph, and catch visual regressions between builds.",
   "type": "module",
   "bin": { "snapcrawl": "bin/snapcrawl.js" },

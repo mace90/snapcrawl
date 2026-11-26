@@ -8,7 +8,7 @@ const { PNG } = pngjs;
 // file can be attached to a ticket or a CI job and opened offline.
 
 export const REPORT_TYPES = ['summary', 'full'];
-const STATUS = { same: 'same', changed: 'changed', new: 'new', bad: 'broken' };
+const STATUS = { same: 'same', changed: 'changed', new: 'new', bad: 'broken', skipped: 'one-time' };
 const CARD_W = 390; // images in the change cards
 const THUMB_W = 200; // graph nodes and the unchanged grid
 
@@ -23,11 +23,13 @@ const fmtDate = (d) => {
 
 /* ---------- review ---------- */
 
-// Same screens pass on their own; every other screen needs a decision.
-export const decisionOf = (report, s) => (s.status === 'same' ? 'passed' : report.review?.[s.id]?.decision || 'open');
+// Same screens pass on their own, one-time screens missing from a run are not compared;
+// every other screen needs a decision.
+export const needsReview = (s) => s.status !== 'same' && s.status !== 'skipped';
+export const decisionOf = (report, s) => (s.status === 'same' ? 'passed' : s.status === 'skipped' ? 'skipped' : report.review?.[s.id]?.decision || 'open');
 
 export function reviewState(report) {
-  const changes = report.screens.filter((s) => s.status !== 'same');
+  const changes = report.screens.filter(needsReview);
   const dec = changes.map((s) => decisionOf(report, s));
   const approved = dec.filter((d) => d === 'approved').length;
   const rejected = dec.filter((d) => d === 'rejected').length;
@@ -52,7 +54,7 @@ const ACTIONS = { approve: 'approved', reject: 'rejected', undo: null };
 export function applyReview(report, target, action) {
   if (!(action in ACTIONS)) throw new Error(`unknown action "${action}" · use approve, reject or undo`);
   const decision = ACTIONS[action];
-  const changes = report.screens.filter((s) => s.status !== 'same');
+  const changes = report.screens.filter(needsReview);
   let ids;
   if (target === 'all') {
     ids = changes.filter((s) => (decision ? decisionOf(report, s) === 'open' : decisionOf(report, s) !== 'open')).map((s) => s.id);
@@ -60,6 +62,7 @@ export function applyReview(report, target, action) {
     const s = report.screens.find((x) => x.id === target);
     if (!s) throw new Error(`no screen "${target}" in this report · snapcrawl review lists the ids`);
     if (s.status === 'same') throw new Error(`${target} is unchanged, nothing to review`);
+    if (s.status === 'skipped') throw new Error(`${target} is a one-time screen that is not in both runs, nothing to review`);
     ids = [s.id];
   }
   setDecision(report, ids, decision);
@@ -123,10 +126,10 @@ function graphSvg(report, thumb) {
     const d = decisionOf(report, s);
     return {
       id: s.id, name: s.name, depth: s.depth, status: s.status,
-      cls: d === 'approved' || d === 'rejected' ? 'r-' + d : '',
+      cls: [d === 'approved' || d === 'rejected' ? 'r-' + d : '', s.oneTime ? 'one' : ''].filter(Boolean).join(' '),
       img: thumb(s.headImg || s.baseImg, THUMB_W)?.src,
       placeholder: s.reason === 'crash' ? 'crash' : 'no screen',
-      foot: s.status === 'changed' ? `Δ ${pct(s.ratio)}` : s.status === 'same' ? 'Δ 0.00 %' : s.reason || s.status,
+      foot: s.status === 'changed' ? `Δ ${pct(s.ratio)}` : s.status === 'same' ? (s.oneTime ? 'one-time · Δ 0.00 %' : 'Δ 0.00 %') : s.oneTime ? 'one-time' : s.reason || s.status,
     };
   });
   const edges = report.edges.map((e) => ({ ...e, kind: st[e.to] === 'bad' ? 'bad' : st[e.to] === 'new' ? 'new' : '' }));
@@ -203,7 +206,7 @@ h2{display:flex;gap:10px;align-items:baseline;font-size:13px;font-weight:500;mar
 section{padding:24px 0;border-bottom:1px solid var(--line)}
 .tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));border-top:1px solid var(--line);border-left:1px solid var(--line)}
 .tile{padding:12px 14px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.tile small{display:flex;align-items:center;gap:8px;font:11px var(--mono);color:var(--mut)}.tile b{display:block;font-size:22px;font-weight:500;letter-spacing:-.02em;margin-top:2px}
-.k{width:7px;height:7px;flex:none;background:var(--dim)}.k-same,.k-passed,.k-approved{background:var(--ok)}.k-changed{background:var(--chg)}.k-new{background:var(--new)}.k-bad,.k-rejected{background:var(--bad)}
+.k{width:7px;height:7px;flex:none;background:var(--dim)}.k-same,.k-passed,.k-approved{background:var(--ok)}.k-skipped{background:var(--dim)}.k-changed{background:var(--chg)}.k-new{background:var(--new)}.k-bad,.k-rejected{background:var(--bad)}
 .tw{overflow-x:auto;border:1px solid var(--line);border-radius:6px}
 table.t{width:100%;border-collapse:collapse;font-size:13px}
 .t th{font:11px var(--mono);color:var(--mut);font-weight:400;text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
@@ -212,7 +215,7 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}
 .t td small{display:block;font:11px var(--mono);color:var(--dim)}.t .nt{font-size:12px;color:var(--mut);margin-top:4px}
 .t a{text-decoration:none}.t a:hover{text-decoration:underline}
 .tag{display:inline-block;font:11px var(--mono);padding:1px 6px;border:1px solid var(--line2);border-radius:4px;color:var(--mut);white-space:nowrap}
-.t-same,.t-passed,.t-approved{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,transparent)}.t-changed{color:var(--chg);border-color:color-mix(in srgb,var(--chg) 40%,transparent)}.t-new{color:var(--new);border-color:color-mix(in srgb,var(--new) 40%,transparent)}.t-bad,.t-rejected{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 40%,transparent)}.t-open{color:var(--fg)}
+.t-same,.t-passed,.t-approved{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,transparent)}.t-skipped{color:var(--dim)}.t-changed{color:var(--chg);border-color:color-mix(in srgb,var(--chg) 40%,transparent)}.t-new{color:var(--new);border-color:color-mix(in srgb,var(--new) 40%,transparent)}.t-bad,.t-rejected{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 40%,transparent)}.t-open{color:var(--fg)}
 .graph{position:relative;height:min(70vh,560px);border:1px solid var(--line);border-radius:6px;overflow:hidden;background-color:var(--bg);background-image:radial-gradient(#1b1b1b 1px,transparent 1.2px);background-size:20px 20px}
 .graph svg{position:absolute;inset:0;width:100%;height:100%;cursor:grab;user-select:none;-webkit-user-select:none;touch-action:none}.graph.drag svg{cursor:grabbing}
 .tools{position:absolute;right:10px;bottom:10px;display:flex;border:1px solid var(--line2);border-radius:6px;overflow:hidden;background:var(--s1)}
@@ -225,7 +228,7 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}
 .nn{font-size:11.5px;font-weight:500;fill:var(--fg);font-family:var(--sans)}.nf{font:9.5px var(--mono);fill:var(--dim)}
 .sq{fill:var(--dim)}.s-same .sq{fill:var(--ok)}.s-changed .sq{fill:var(--chg)}.s-new .sq{fill:var(--new)}.s-bad .sq{fill:var(--bad)}
 .s-changed .nb{stroke:color-mix(in srgb,var(--chg) 55%,var(--line2))}.s-new .nb{stroke:color-mix(in srgb,var(--new) 55%,var(--line2))}.s-bad .nb{stroke:color-mix(in srgb,var(--bad) 60%,var(--line2))}
-.r-approved .sq{fill:var(--ok)}.r-rejected .nb{stroke:var(--bad);stroke-dasharray:4 3}
+.r-approved .sq{fill:var(--ok)}.r-rejected .nb{stroke:var(--bad);stroke-dasharray:4 3}.one .nb{stroke-dasharray:5 4}.s-skipped .sq{fill:var(--dim)}
 .ph{fill:#141414}.pht{font:10px var(--mono);fill:#6a6a6a}.port{fill:var(--bg);stroke:#4a4a4a}
 .hint{font:11px var(--mono);color:var(--dim);margin:8px 0 0}
 .card{border:1px solid var(--line);border-radius:8px;padding:16px;margin-bottom:16px;scroll-margin-top:16px}
@@ -336,6 +339,7 @@ export function renderReport({ store, report, type = 'summary', version = '' }) 
 
   const tiles = [
     ['same', sum.same, 'k-same'], ['changed', sum.changed, 'k-changed'], ['new', sum.new, 'k-new'], ['broken', sum.bad, 'k-bad'],
+    ...(sum.skipped ? [['one-time', sum.skipped, '']] : []),
     ['reviewed', `${st.reviewed}/${st.total}`, ''], ['approved', st.approved, 'k-approved'], ['rejected', st.rejected, 'k-rejected'],
   ].map(([l, n, k]) => `<div class="tile"><small><i class="k ${k}"></i>${l}</small><b>${n}</b></div>`).join('');
 
@@ -348,14 +352,14 @@ export function renderReport({ store, report, type = 'summary', version = '' }) 
 
   let extra = '';
   if (full) {
-    const changes = report.screens.filter((s) => s.status !== 'same');
-    const same = report.screens.filter((s) => s.status === 'same');
-    const legend = Object.entries(STATUS).map(([k, l]) => `<span><i class="k k-${k}"></i>${l}</span>`).join('');
+    const changes = report.screens.filter(needsReview);
+    const same = report.screens.filter((s) => !needsReview(s));
+    const legend = Object.entries(STATUS).filter(([k]) => k !== 'skipped' || sum.skipped).map(([k, l]) => `<span><i class="k k-${k}"></i>${l}</span>`).join('');
     extra = `<section><h2><span>03</span>Screen graph</h2><div class="graph">${graphSvg(report, image)}<div class="legend">${legend}</div><div class="tools"><button type="button" data-z="in" aria-label="zoom in">+</button><button type="button" data-z="out" aria-label="zoom out">−</button><button type="button" data-z="fit">fit</button></div></div><p class="hint">drag to pan · scroll to zoom · click a screen to jump to it</p></section>
 <section><h2><span>04</span>Changes · ${changes.length}</h2>${changes.map((s) => card(report, s, image)).join('\n') || '<p class="sub">No changes.</p>'}</section>
-<section><h2><span>05</span>Unchanged · ${same.length}</h2><div class="grid">${same.map((s) => {
-      const img = image(s.headImg, THUMB_W);
-      return `<figure class="mini" id="s-${esc(s.id)}"><div class="frame" style="--ar:${img ? (img.w / img.h).toFixed(4) : 0.4613}">${img ? `<img alt="${esc(s.name)}" src="${img.src}" width="${img.w}" height="${img.h}" loading="lazy">` : '<div class="noimg">no screenshot</div>'}</div><figcaption>${esc(s.name)}</figcaption></figure>`;
+<section><h2><span>05</span>Unchanged${sum.skipped ? ' and one-time' : ''} · ${same.length}</h2><div class="grid">${same.map((s) => {
+      const img = image(s.headImg || s.baseImg, THUMB_W);
+      return `<figure class="mini" id="s-${esc(s.id)}"><div class="frame" style="--ar:${img ? (img.w / img.h).toFixed(4) : 0.4613}">${img ? `<img alt="${esc(s.name)}" src="${img.src}" width="${img.w}" height="${img.h}" loading="lazy">` : '<div class="noimg">no screenshot</div>'}</div><figcaption>${esc(s.name)}${s.status === 'skipped' ? ' · one-time' : ''}</figcaption></figure>`;
     }).join('') || '<p class="sub">None.</p>'}</div></section>`;
   }
 

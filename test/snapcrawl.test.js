@@ -64,7 +64,7 @@ test('diff classifies same, changed, new, crashed and unreachable screens', () =
   const store = tmpStore();
   const { base, head } = createDemo(store);
   const r = buildReport({ store, baseId: base, headId: head, cfg: config() });
-  assert.deepEqual(r.summary, { screens: 14, same: 6, changed: 5, new: 1, bad: 2 });
+  assert.deepEqual(r.summary, { screens: 14, same: 6, changed: 5, new: 1, bad: 2, skipped: 0 });
   assert.equal(r.screens.find((s) => s.name === 'Statistik').status, 'new');
   assert.equal(r.screens.find((s) => s.reason === 'crash').status, 'bad');
   assert.equal(r.screens.find((s) => s.reason === 'unreachable').name, 'Checkout');

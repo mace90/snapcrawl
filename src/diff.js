@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import pixelmatch from 'pixelmatch';
 import pngjs from 'pngjs';
+import { similarity } from './signature.js';
 
 const { PNG } = pngjs;
 const CELL = 16;
@@ -48,7 +49,9 @@ function boxesFrom(diff, w, h) {
   return boxes.sort((a, b) => b[2] * b[3] - a[2] * a[3]).slice(0, 12);
 }
 
-export function comparePng(fileA, fileB, outFile, { threshold = 0.1, ignoreStatusBar = true } = {}) {
+// statusBarRatio: status bar height / screen height (both in points). The mask is applied in
+// image pixels, so it fits any screenshot scale (simulator 3x, real devices 2x or 3x).
+export function comparePng(fileA, fileB, outFile, { threshold = 0.1, ignoreStatusBar = true, statusBarRatio } = {}) {
   const a = readPng(fileA);
   const b = readPng(fileB);
   if (a.width !== b.width || a.height !== b.height) {
@@ -57,7 +60,7 @@ export function comparePng(fileA, fileB, outFile, { threshold = 0.1, ignoreStatu
   const { width: w, height: h } = a;
   const bData = Buffer.from(b.data);
   if (ignoreStatusBar) {
-    const rows = Math.round(h * 0.065); // ~ the iOS status bar
+    const rows = Math.min(h, Math.round(h * (statusBarRatio > 0 && statusBarRatio < 0.25 ? statusBarRatio : 0.065))); // default ~ the iOS status bar
     a.data.copy(bData, 0, 0, rows * w * 4);
   }
   const out = new PNG({ width: w, height: h });
@@ -67,7 +70,14 @@ export function comparePng(fileA, fileB, outFile, { threshold = 0.1, ignoreStatu
 }
 
 // Screens are matched across runs by the path of taps that reached them (stable across
-// visual changes), then by structural fingerprint.
+// visual changes), then by structural fingerprint, then by signature similarity.
+// One-time screens (onboarding) are compared only when both runs have them.
+// Measured status bar of either run (real devices report it), as a share of the screen height.
+function statusBarRatio(pairs) {
+  const ratios = pairs.map(([run, s]) => (run?.meta.device?.statusBar && s?.size?.h ? run.meta.device.statusBar / s.size.h : 0));
+  return Math.max(...ratios) || undefined;
+}
+
 const pathKey = (s) => s.path.map((r) => `${r.type}:${r.id || r.label}`).join(' > ');
 
 export function buildReport({ store, baseId, headId, cfg }) {
@@ -76,8 +86,19 @@ export function buildReport({ store, baseId, headId, cfg }) {
   const outDir = store.diffDir(baseId, headId);
   fs.mkdirSync(outDir, { recursive: true });
 
-  const baseByKey = new Map(base.screens.map((s) => [pathKey(s), s]));
+  const threshold = cfg.crawl?.matchThreshold ?? 0.8;
+  const baseByKey = new Map(base.screens.filter((s) => !s.oneTime).map((s) => [pathKey(s), s]));
   const baseByFp = new Map(base.screens.filter((s) => !s.crash).map((s) => [s.fp, s]));
+  const similar = (h) => {
+    let best = null;
+    let top = threshold;
+    for (const b of base.screens) {
+      if (b.crash || used.has(b.id) || !b.sig || !h.sig) continue;
+      const v = similarity(h.sig, b.sig);
+      if (v >= top) [best, top] = [b, v];
+    }
+    return best;
+  };
   const used = new Set();
   const screens = [];
   const idMap = new Map(); // head screen id -> report id
@@ -86,21 +107,25 @@ export function buildReport({ store, baseId, headId, cfg }) {
   const img = (run, s) => (s?.screenshot ? `runs/${run}/${s.screenshot}` : null);
 
   for (const h of head.screens) {
-    let b = baseByKey.get(pathKey(h));
+    let b = h.oneTime ? null : baseByKey.get(pathKey(h));
     if (!b || used.has(b.id)) b = h.crash ? null : baseByFp.get(h.fp);
     if (b && used.has(b.id)) b = null;
+    if (!b && !h.crash) b = similar(h);
     if (b) used.add(b.id);
 
     const entry = { id: h.id, name: h.name, depth: h.depth, path: h.path.map((r) => r.label || r.type), elements: h.elements, baseImg: img(baseId, b), headImg: img(headId, h), diffImg: null, ratio: null, boxes: [], size: null };
+    if (h.oneTime || b?.oneTime) entry.oneTime = true;
     if (h.crash) {
       Object.assign(entry, { status: 'bad', reason: 'crash', name: b ? b.name : 'Crash' });
+    } else if (!b && h.oneTime) {
+      Object.assign(entry, { status: 'skipped', reason: 'one-time (skipped)' });
     } else if (!b) {
       Object.assign(entry, { status: 'new' });
     } else if (b.crash) {
       Object.assign(entry, { status: 'new', reason: 'was a crash in baseline' });
     } else {
       const file = `${h.id}.png`;
-      const r = comparePng(path.join(store.runDir(baseId), b.screenshot), path.join(store.runDir(headId), h.screenshot), path.join(outDir, file), cfg.diff);
+      const r = comparePng(path.join(store.runDir(baseId), b.screenshot), path.join(store.runDir(headId), h.screenshot), path.join(outDir, file), { ...cfg.diff, statusBarRatio: statusBarRatio([[base, b], [head, h]]) });
       const changed = r.ratio >= cfg.diff.minChangedRatio;
       Object.assign(entry, { status: changed ? 'changed' : 'same', ratio: r.ratio, boxes: changed ? r.boxes : [], size: [r.width, r.height], diffImg: `diffs/${baseId}__${headId}/${file}`, sizeMismatch: !!r.sizeMismatch });
     }
@@ -113,7 +138,8 @@ export function buildReport({ store, baseId, headId, cfg }) {
     if (used.has(b.id) || b.crash) continue;
     const id = `base-${b.id}`;
     baseIdMap.set(b.id, id);
-    screens.push({ id, name: b.name, depth: b.depth, path: b.path.map((r) => r.label || r.type), elements: b.elements, status: 'bad', reason: 'unreachable', baseImg: img(baseId, b), headImg: null, diffImg: null, ratio: null, boxes: [], size: null });
+    const gone = b.oneTime ? { status: 'skipped', reason: 'one-time (skipped)', oneTime: true } : { status: 'bad', reason: 'unreachable' };
+    screens.push({ id, name: b.name, depth: b.depth, path: b.path.map((r) => r.label || r.type), elements: b.elements, ...gone, baseImg: img(baseId, b), headImg: null, diffImg: null, ratio: null, boxes: [], size: null });
   }
 
   const edges = [];
@@ -137,7 +163,7 @@ export function buildReport({ store, baseId, headId, cfg }) {
     head: { id: headId, label: head.meta.label, device: head.meta.device?.name || '' },
     app: head.meta.app,
     appName: head.meta.appName || '',
-    summary: { screens: screens.length, same: count('same'), changed: count('changed'), new: count('new'), bad: count('bad') },
+    summary: { screens: screens.length, same: count('same'), changed: count('changed'), new: count('new'), bad: count('bad'), skipped: count('skipped') },
     screens,
     edges,
     review: previous?.review || {},

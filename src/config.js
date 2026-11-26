@@ -1,13 +1,14 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { DEFAULT_DISMISS } from './interrupts.js';
 
 export const GLOBAL_FILE = path.join(os.homedir(), '.snapcrawl', 'config.json');
 export const LOCAL_FILE = 'snapcrawl.config.json';
 
 export const DEFAULTS = {
   app: { bundleId: '' },
-  device: { platform: 'ios-sim', udid: 'booted' },
+  device: { platform: 'ios-sim', udid: 'booted', wdaUrl: 'http://127.0.0.1:8100' }, // platform: ios-sim | ios-device
   auth: {
     username: '',
     password: '',
@@ -21,6 +22,11 @@ export const DEFAULTS = {
     timeLimitMin: 20,
     settleMs: 900,
     launchMs: 2500,
+    matchThreshold: 0.8, // 0…1 · how similar two views must be to count as the same screen
+    prepare: false, // pause after launch so you can bring the app to the start screen
+    webLinks: 'skip', // skip | tap  links in web content usually leave the app
+    systemAlerts: 'dismiss', // dismiss | accept | pause  permission prompts (notifications, location, tracking)
+    dismiss: DEFAULT_DISMISS, // buttons that close onboarding sheets and hints
     blocklist: [
       'log out', 'logout', 'sign out', 'abmelden',
       'delete account', 'konto löschen',
