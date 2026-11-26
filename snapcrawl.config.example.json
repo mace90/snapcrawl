@@ -1,0 +1,40 @@
+{
+  "app": {
+    "bundleId": "com.example.myapp"
+  },
+  "device": {
+    "platform": "ios-sim",
+    "udid": "booted"
+  },
+  "auth": {
+    "username": "env:SNAPCRAWL_USERNAME",
+    "password": "env:SNAPCRAWL_PASSWORD",
+    "mfa": "none",
+    "totpSecret": "env:SNAPCRAWL_TOTP_SECRET",
+    "fallbackManual": true
+  },
+  "crawl": {
+    "maxDepth": 8,
+    "maxScreens": 200,
+    "timeLimitMin": 20,
+    "blocklist": [
+      "log out",
+      "logout",
+      "sign out",
+      "abmelden",
+      "delete account",
+      "konto löschen",
+      "buy",
+      "kaufen",
+      "purchase",
+      "pay now",
+      "jetzt zahlen",
+      "kauf abschließen"
+    ]
+  },
+  "diff": {
+    "threshold": 0.1,
+    "minChangedRatio": 0.0005,
+    "ignoreStatusBar": true
+  }
+}
