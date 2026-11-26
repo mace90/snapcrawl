@@ -53,6 +53,12 @@ pre.code{margin:10px 0 0;padding:10px 12px;border:1px solid var(--line);border-r
 .cli{font:12px var(--mono);color:var(--mut);overflow-wrap:anywhere}.cli b{color:var(--fg);font-weight:400}
 .btn{min-height:44px;padding:0 16px;border-radius:6px;border:1px solid var(--line2);background:none;cursor:pointer;font-size:13px;display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
 .btn:hover{border-color:var(--mut)}.btn.pri{background:var(--fg);border-color:var(--fg);color:var(--bg)}.btn[disabled]{opacity:.4;cursor:not-allowed}
+.btn.sm{min-height:36px;padding:0 12px;font-size:12px}a.btn{text-decoration:none;color:var(--fg)}a.btn.pri{color:var(--bg)}
+.menu{position:relative}.menu>summary{list-style:none}.menu>summary::-webkit-details-marker{display:none}.menu[open]>summary{border-color:var(--mut)}
+.menu .pop{position:absolute;right:0;top:calc(100% + 6px);z-index:15;min-width:220px;display:grid;padding:4px;border:1px solid var(--line2);border-radius:6px;background:var(--s1)}
+.mi{display:flex;align-items:center;gap:12px;min-height:40px;padding:0 10px;border-radius:4px;color:var(--fg);text-decoration:none;font-size:13px}.mi:hover,.mi:focus-visible{background:var(--s2)}.mi small{margin-left:auto;font:11px var(--mono);color:var(--mut)}
+.done{border:1px solid color-mix(in srgb,var(--ok) 55%,transparent);border-radius:8px;padding:14px;margin-bottom:18px}.done.bad{border-color:color-mix(in srgb,var(--bad) 55%,transparent)}
+.done b{display:flex;align-items:center;gap:8px;font-weight:500}.done b i{width:7px;height:7px;background:var(--ok)}.done.bad b i{background:var(--bad)}.done p{margin:4px 0 12px;font:12px var(--mono);color:var(--mut)}
 .btn.g{border-color:color-mix(in srgb,var(--ok) 60%,transparent);color:var(--ok)}.btn.r{border-color:color-mix(in srgb,var(--bad) 60%,transparent);color:var(--bad)}
 /* workspace */
 .work{display:grid;grid-template-columns:minmax(0,1fr) 420px;height:calc(100vh - 52px - var(--hh,0px));min-height:520px}
@@ -62,6 +68,7 @@ pre.code{margin:10px 0 0;padding:10px 12px;border:1px solid var(--line);border-r
 .tools button{min-width:44px;height:36px;border:0;border-right:1px solid var(--line2);background:none;cursor:pointer;font:12px var(--mono);color:var(--mut);padding:0 10px}.tools button:last-child{border-right:0}.tools button:hover{color:var(--fg)}
 .legend{position:absolute;left:12px;bottom:14px;display:flex;flex-wrap:wrap;gap:4px 14px;font:11px var(--mono);color:var(--mut);pointer-events:none}
 .legend i{display:inline-block;width:7px;height:7px;margin-right:6px}
+.empty[hidden]{display:none!important}
 .empty{position:absolute;inset:0;display:grid;place-content:center;text-align:center;color:var(--mut);padding:24px}
 .empty code{font:12px var(--mono);color:var(--fg)}
 .side{overflow:auto;padding:20px;background:var(--bg)}
@@ -102,7 +109,7 @@ table.kv{width:100%;border-collapse:collapse;font:12px var(--mono);margin:16px 0
 .sec h4{font:11px var(--mono);color:var(--mut);font-weight:400;margin:0 0 10px}
 .qlist{display:grid;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:6px;overflow:hidden}
 .q{display:grid;grid-template-columns:8px minmax(0,1fr) auto;gap:10px;align-items:center;min-height:40px;padding:6px 10px;border:0;background:var(--bg);cursor:pointer;text-align:left;font-size:13px}
-.q:hover{background:var(--s1)}.q i{width:7px;height:7px}.q small{font:11px var(--mono);color:var(--mut)}
+.q:hover{background:var(--s1)}.q.on{background:var(--s2)}.q i.base{background:var(--ok)}.q i.plain{background:var(--line2)}.q i{width:7px;height:7px}.q small{font:11px var(--mono);color:var(--mut)}
 .k-same{background:var(--ok)}.k-changed{background:var(--chg)}.k-new{background:var(--new)}.k-bad{background:var(--bad)}
 .filters{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .fbtn{display:inline-flex;align-items:center;gap:8px;min-height:36px;padding:0 10px;border:1px solid var(--line2);border-radius:6px;background:none;cursor:pointer;font:12px var(--mono);color:var(--mut)}
@@ -151,7 +158,7 @@ table.kv{width:100%;border-collapse:collapse;font:12px var(--mono);margin:16px 0
       <label class="fl"><span>blocklist · elements containing these words are never tapped</span><textarea class="in" id="block" spellcheck="false"></textarea></label>
     </section>
   </div>
-  <div class="foot"><span class="cli" id="cli"></span><button class="btn pri" id="start">Start crawl</button></div>
+  <div class="foot"><div><span class="cli" id="cli"></span><p class="sub" id="basehint"></p></div><button class="btn pri" id="start">Start crawl</button></div>
 </section>
 
 <section id="v-run" class="view">
@@ -178,6 +185,9 @@ const api = async (url, body) => {
 const file = (rel) => (rel ? '/files/' + rel.split('/').map(encodeURIComponent).join('/') : '');
 const toast = (msg) => { const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => (t.style.display = 'none'), 3200); };
 const fmtT = (ms) => { const s = ms / 1000; return `${String(Math.floor(s / 60)).padStart(2, '0')}:${(s % 60).toFixed(1).padStart(4, '0')}`; };
+const fmtD = (d) => (d ? new Date(d).toLocaleString(undefined, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '');
+const appOf = (r) => r.appName || r.app || '';
+const runName = (r) => `${r.label || 'run'} · ${fmtD(r.created)}`;
 const pct = (r) => (r == null ? '–' : (r * 100).toFixed(2) + ' %');
 
 /* ---------- graph component ---------- */
@@ -190,7 +200,7 @@ class Graph {
       <marker id="${host.id}-b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="mk bad"/></marker>
       <marker id="${host.id}-n" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="mk new"/></marker>
       <clipPath id="${host.id}-c"><rect width="100" height="216" rx="5"/></clipPath></defs><g class="world"></g></svg>
-      <div class="legend"></div><div class="empty" hidden></div>
+      <div class="legend"></div><div class="empty" style="display:none"></div>
       <div class="tools"><button data-z="in" aria-label="zoom in">+</button><button data-z="out" aria-label="zoom out">−</button><button data-z="fit">fit</button></div>`;
     this.svg = $('svg', host); this.world = $('.world', host);
     this.bind();
@@ -219,7 +229,7 @@ class Graph {
     $('.tools', this.host).addEventListener('click', (e) => { const z = e.target.dataset.z; const w = this.svg.clientWidth / 2, h = this.svg.clientHeight / 2; if (z === 'in') this.zoom(1.25, w, h); if (z === 'out') this.zoom(0.8, w, h); if (z === 'fit') this.fit(); });
     new ResizeObserver(() => { if (!this.fitted && this.svg.clientWidth) this.fit(); }).observe(this.host);
   }
-  empty(html) { const e = $('.empty', this.host); e.hidden = !html; e.innerHTML = html || ''; if (html) this.world.innerHTML = ''; }
+  empty(html) { const e = $('.empty', this.host); e.style.display = html ? 'grid' : 'none'; e.innerHTML = html || ''; if (html) this.world.innerHTML = ''; }
   // nodes: {id,name,depth,status,img,foot,cls}; edges: {from,to,label,kind}
   render(nodes, edges, { sel, dim, fresh, freshEdge, legend } = {}) {
     this.empty('');
@@ -319,6 +329,9 @@ function renderCli() {
   if ($('#depth').value) parts.push(`--max-depth ${esc($('#depth').value)}`);
   if ($('#label').value) parts.push(`--label ${esc($('#label').value)}`);
   $('#cli').innerHTML = '$ ' + parts.join(' ');
+  const bid = $('#bundle').value.trim();
+  const b = bid && S.state?.baselines?.[bid] && S.state.runs.find((r) => r.id === S.state.baselines[bid]);
+  $('#basehint').textContent = !bid ? '' : b ? `will be compared with the baseline ${runName(b)}` : 'no baseline for this app yet · this run becomes the baseline';
 }
 function fillSetup() {
   const c = S.state.config;
@@ -345,90 +358,133 @@ $('#start').onclick = async () => {
     auth: { username: $('#user').value, password: $('#pass').value, mfa: S.mfa, totpSecret: $('#totp').value.trim(), fallbackManual: $('#fallback').checked },
     crawl: { maxDepth: +$('#depth').value || undefined, maxScreens: +$('#maxs').value || undefined, timeLimitMin: +$('#mins').value || undefined, blocklist: $('#block').value.split(',').map((s) => s.trim()).filter(Boolean) },
   };
-  try { await api('/api/crawl', body); S.live = { id: null, atlas: null, log: [], ask: null, running: true, lastTap: null, started: Date.now() }; show('run'); }
+  try { await api('/api/crawl', body); S.live = { id: null, atlas: null, log: [], logRun: null, ask: null, running: true }; runGraph.fitted = false; show('run'); }
   catch (e) { toast(e.message); }
 };
 
 /* ---------- run ---------- */
-const runGraph = new Graph($('#runcanvas'), { onSelect: (id) => { if (!S.live.running && S.live.id) { S.cmp.head = S.live.id; S.cmp.sel = id; show('compare'); } } });
+const runGraph = new Graph($('#runcanvas'), { onSelect: (id) => { const a = S.live.atlas; if (!S.live.running && a) openCompare(a.meta.id, id); } });
 let fetchT = 0;
 function refreshAtlas() { clearTimeout(fetchT); fetchT = setTimeout(async () => { if (!S.live.id) return; try { S.live.atlas = await api('/api/run?id=' + encodeURIComponent(S.live.id)); renderRun(); } catch {} }, 120); }
+function runList() {
+  const runs = S.state?.runs || [];
+  if (!runs.length) return '';
+  const B = S.state.baselines || {};
+  const apps = [...new Set(runs.map((r) => r.app))];
+  return `<div class="sec"><h4>runs</h4>${apps.map((app) => { const rs = runs.filter((r) => r.app === app); return `<p class="sub" style="margin:12px 0 6px">${esc(appOf(rs[0]))}</p><div class="qlist">${rs.map((r) => `<button class="q${r.id === S.live.id ? ' on' : ''}" data-open="${esc(r.id)}"><i class="${B[app] === r.id ? 'base' : 'plain'}"></i><span>${esc(r.label || 'run')}${B[app] === r.id ? ' <small>baseline</small>' : ''}</span><small>${fmtD(r.created)} · ${r.screens}${r.status !== 'done' ? ' · ' + esc(r.status) : ''}</small></button>`).join('')}</div>`; }).join('')}</div>`;
+}
 function renderRun() {
   const L = S.live, a = L.atlas, head = $('#runhead'), side = $('#runside');
-  const n = a ? a.screens.filter((s) => !s.crash).length : 0, x = a ? a.screens.filter((s) => s.crash).length : 0;
   if (!L.running && !a) {
-    head.innerHTML = `<div><h1>No crawl running</h1><p class="sub">Configure one under Setup, or run snapcrawl crawl in a terminal.</p></div>`;
-    side.innerHTML = '<p class="hint">The device mirror and the log appear here while a crawl runs.</p>';
-    runGraph.empty('<p>No screens yet.</p>');
+    head.innerHTML = `<div><h1>Runs</h1><p class="sub">Open a previous run, or start a new crawl under Setup.</p></div><button class="btn pri" data-go="setup">New crawl</button>`;
+    side.innerHTML = runList() || '<p class="hint" style="margin-top:0">No runs yet.</p>';
+    runGraph.empty('<p>Pick a run on the right.</p>');
     return;
   }
+  const n = a ? a.screens.filter((s) => !s.crash).length : 0, x = a ? a.screens.filter((s) => s.crash).length : 0;
   const errored = a?.meta.status === 'failed';
-  head.innerHTML = `<div><h1>${L.running ? (L.ask ? 'Waiting for you' : 'Crawling…') : errored ? 'Crawl failed' : 'Crawl finished'}</h1><p class="sub">${esc(a?.meta.app || '')} · ${n} screens · ${a?.edges.length || 0} transitions · ${x} crashes${a?.meta.device ? ' · ' + esc(a.meta.device.name) : ''}</p></div>
-    <div class="acts">${L.running ? '<button class="btn" data-run="stop">Stop</button>' : `<button class="btn pri" data-run="compare"${a && !errored ? '' : ' disabled'}>Compare with baseline</button>`}</div>`;
+  const B = S.state?.baselines || {};
+  const baseId = a && B[a.meta.app], isBase = a && baseId === a.meta.id;
+  const title = L.running ? (L.ask ? 'Waiting for you' : 'Crawling…') : errored ? 'Crawl failed' : `${esc(a.meta.appName || a.meta.app)} · ${esc(a.meta.label || 'run')}`;
+  let acts = '';
+  if (L.running) acts = '<button class="btn" data-run="stop">Stop</button>';
+  else if (a && !errored) acts = isBase ? `<span class="tag t-same">baseline</span>` : `${baseId ? '<button class="btn pri" data-run="compare">Compare with baseline</button>' : ''}<button class="btn" data-run="baseline">Make baseline</button>`;
+  head.innerHTML = `<div><h1>${title}</h1><p class="sub">${a ? `${esc(a.meta.app)} · ` : ''}${n} screens · ${a?.edges.length || 0} transitions · ${x} crashes${a?.meta.device ? ' · ' + esc(a.meta.device.name) : ''}${a && !L.running ? ' · ' + fmtD(a.meta.created) : ''}</p></div><div class="acts">${acts}</div>`;
+  let mirror = '<div class="frame"><div class="noimg">waiting</div></div>';
   if (a) {
     const last = [...a.screens].reverse().find((s) => s.screenshot);
     const nodes = a.screens.map((s) => ({ id: s.id, name: s.name, depth: s.depth, status: s.crash ? 'bad' : 'live', img: s.screenshot ? file(`runs/${a.meta.id}/${s.screenshot}`) : null, placeholder: 'crash', foot: s.crash ? 'crash' : `${s.elements} el · ${s.actions?.length ?? 0} act` }));
     const edges = a.edges.map((e) => ({ from: e.from, to: e.to, label: e.label, kind: a.screens.find((s) => s.id === e.to)?.crash ? 'bad' : '' }));
     const le = a.edges.at(-1);
-    runGraph.render(nodes, edges, { fresh: last?.id, freshEdge: le && le.from + '>' + le.to, legend: '<span><i style="background:#ededed"></i>screen</span><span><i style="background:var(--bad)"></i>crash</span>' });
-    if (a.screens.length <= 2) runGraph.fit();
-    var mirror = last ? `<div class="frame"><img alt="latest screen" src="${file(`runs/${a.meta.id}/${last.screenshot}`)}"></div>` : '<div class="frame"><div class="noimg">waiting</div></div>';
+    runGraph.render(nodes, edges, { fresh: L.running ? last?.id : null, freshEdge: L.running && le ? le.from + '>' + le.to : null, legend: '<span><i style="background:#ededed"></i>screen</span><span><i style="background:var(--bad)"></i>crash</span>' });
+    if (L.running && a.screens.length <= 2) runGraph.fit();
+    if (last) mirror = `<div class="frame"><img alt="latest screen" src="${file(`runs/${a.meta.id}/${last.screenshot}`)}"></div>`;
   } else runGraph.empty('<p>Starting…</p>');
   const ask = L.ask ? `<div class="ask"><p>${esc(L.ask.prompt)}</p>${L.ask.kind === 'code' ? '<div class="r2"><input class="in" id="code" inputmode="numeric" autocomplete="one-time-code" placeholder="000000" aria-label="2FA code"><button class="btn pri" data-run="answer">Submit</button></div>' : '<button class="btn pri" data-run="answer">I am logged in · continue</button>'}</div>` : '';
+  const showLog = L.log.length && (L.running || L.logRun === a?.meta.id);
   const t0 = L.log[0]?.t || Date.now();
-  side.innerHTML = `${ask}<div class="mir">${mirror || '<div class="frame"><div class="noimg">waiting</div></div>'}<table class="kv"><tr><td>run</td><td>${esc(L.id || '…')}</td></tr><tr><td>screens</td><td>${n}</td></tr><tr><td>transitions</td><td>${a?.edges.length || 0}</td></tr><tr><td>crashes</td><td>${x}</td></tr><tr><td>elapsed</td><td>${fmtT((L.log.at(-1)?.t || t0) - t0)}</td></tr></table></div>
-    <div class="log" id="log">${L.log.map((l) => `<div class="ln l-${l.level}"><span class="a">${fmtT(l.t - t0)}</span><span class="b">${l.level}</span><span class="c">${esc(l.msg)}</span></div>`).join('')}</div>`;
-  const lg = $('#log'); lg.scrollTop = lg.scrollHeight;
+  const elapsed = a?.meta.durationMs ?? (L.log.at(-1)?.t || t0) - t0;
+  side.innerHTML = `${ask}<div class="mir">${mirror}<table class="kv"><tr><td>run</td><td>${esc(L.id || '…')}</td></tr><tr><td>screens</td><td>${n}</td></tr><tr><td>transitions</td><td>${a?.edges.length || 0}</td></tr><tr><td>crashes</td><td>${x}</td></tr><tr><td>duration</td><td>${fmtT(elapsed)}</td></tr></table></div>
+    ${showLog ? `<div class="log" id="log">${L.log.map((l) => `<div class="ln l-${l.level}"><span class="a">${fmtT(l.t - t0)}</span><span class="b">${l.level}</span><span class="c">${esc(l.msg)}</span></div>`).join('')}</div>` : ''}
+    ${L.running ? '' : runList()}`;
+  const lg = $('#log'); if (lg) lg.scrollTop = lg.scrollHeight;
   $('#code')?.focus();
 }
+async function openRun(id) {
+  S.live = { ...S.live, id, atlas: null, running: false, ask: null };
+  runGraph.fitted = false;
+  try { S.live.atlas = await api('/api/run?id=' + encodeURIComponent(id)); } catch (e) { toast(e.message); }
+  renderRun();
+}
+function openCompare(headId, sel) {
+  const r = S.state.runs.find((x) => x.id === headId);
+  S.cmp.head = headId; S.cmp.base = (r && S.state.baselines[r.app]) || ''; S.cmp.report = null; S.cmp.sel = sel || null;
+  show('compare');
+}
+document.body.addEventListener('click', (e) => {
+  const g = e.target.closest('[data-go]'); if (g) show(g.dataset.go);
+  document.querySelectorAll('details.menu[open]').forEach((m) => { if (!m.contains(e.target) || e.target.closest('.mi')) m.open = false; });
+});
 $('#v-run').addEventListener('click', async (e) => {
+  const o = e.target.closest('[data-open]'); if (o) return openRun(o.dataset.open);
   const b = e.target.closest('[data-run]'); if (!b) return;
-  const k = b.dataset.run;
+  const k = b.dataset.run, a = S.live.atlas;
   if (k === 'stop') { await api('/api/stop', {}); toast('stopping after the current step'); }
   if (k === 'answer') { await api('/api/answer', { value: $('#code')?.value || '' }); S.live.ask = null; renderRun(); }
-  if (k === 'compare') { S.cmp.head = S.live.id; S.cmp.base = ''; S.cmp.report = null; await loadState(); show('compare'); }
+  if (k === 'baseline' && a) { await api('/api/baseline', { run: a.meta.id }); toast(`baseline for ${a.meta.appName || a.meta.app} updated`); await loadState(); renderRun(); }
+  if (k === 'compare' && a) openCompare(a.meta.id);
 });
 
 /* ---------- live events ---------- */
 const es = new EventSource('/api/events');
 es.addEventListener('log', (e) => { const l = JSON.parse(e.data); S.live.log.push(l); S.live.running = true; if (S.view === 'run') renderRun(); });
-es.addEventListener('run', (e) => { S.live.id = JSON.parse(e.data).id; refreshAtlas(); });
+es.addEventListener('run', (e) => { S.live.id = JSON.parse(e.data).id; S.live.logRun = S.live.id; refreshAtlas(); });
 ['screen', 'edge'].forEach((t) => es.addEventListener(t, refreshAtlas));
 es.addEventListener('ask', (e) => { S.live.ask = JSON.parse(e.data); if (S.view !== 'run') show('run'); else renderRun(); });
 es.addEventListener('answered', () => { S.live.ask = null; if (S.view === 'run') renderRun(); });
-es.addEventListener('done', () => { S.live.running = false; refreshAtlas(); loadState(); });
-es.addEventListener('state', (e) => { if (!JSON.parse(e.data).running) { S.live.running = false; S.live.ask = null; if (S.view === 'run') renderRun(); } });
+es.addEventListener('done', () => { refreshAtlas(); });
+es.addEventListener('state', async (e) => { if (!JSON.parse(e.data).running) { S.live.running = false; S.live.ask = null; await loadState(); refreshAtlas(); if (S.view === 'run') renderRun(); } });
 es.addEventListener('notes', (e) => { const { n, total } = JSON.parse(e.data); toast(`notes ${n}/${total}`); });
 
 /* ---------- compare ---------- */
 const cmpGraph = new Graph($('#cmpcanvas'), { onSelect: (id) => { S.cmp.sel = id; renderCompare(); if (innerWidth <= 900) $('#cmpside').scrollIntoView({ behavior: 'smooth' }); } });
+const doneRuns = () => (S.state?.runs || []).filter((r) => r.status === 'done');
 async function loadCompare() {
-  const runs = (S.state?.runs || []).filter((r) => r.status === 'done');
-  if (runs.length < 2) {
-    $('#cmphead').innerHTML = `<div><h1>Nothing to compare yet</h1><p class="sub">Two runs are needed: crawl two builds, or try the sample data.</p></div>`;
-    $('#cmpside').innerHTML = '<pre class="code">snapcrawl demo\nsnapcrawl ui</pre>';
-    cmpGraph.empty('<p>Compare needs two runs.</p>');
+  const C = S.cmp, runs = doneRuns(), B = S.state?.baselines || {}, P = S.state?.pair || {};
+  // default (same as the CLI): the newest run of an app created after its baseline; a picked head may go either way
+  if (!C.head && P.head) { C.head = P.head; C.base = P.base; }
+  const headRun = runs.find((r) => r.id === C.head);
+  if (headRun && !C.base) C.base = (B[headRun.app] !== headRun.id && B[headRun.app]) || runs.find((r) => r.app === headRun.app && r.id !== headRun.id)?.id || '';
+  if (!headRun || !C.base) {
+    const why = headRun ? `Only one run of ${esc(appOf(headRun))}. Crawl the same app again after the next build.` : P.error ? esc(P.error) : 'Crawl the same app again after the next build. The first run of an app is its baseline.';
+    $('#cmphead').innerHTML = `<div><h1>Nothing to compare yet</h1><p class="sub">${why}</p></div><button class="btn pri" data-go="setup">New crawl</button>`;
+    $('#cmpside').innerHTML = '<p class="hint" style="margin-top:0">Try it with sample data:</p><pre class="code">snapcrawl demo\nsnapcrawl ui</pre>';
+    cmpGraph.empty('<p>Compare needs two runs of the same app.</p>');
     return;
   }
-  const C = S.cmp;
-  C.base ||= S.state.baseline || runs[runs.length - 1].id;
-  C.head ||= runs.find((r) => r.id !== C.base)?.id;
   if (C.report && C.report.base.id === C.base && C.report.head.id === C.head) return renderCompare();
   try { C.report = await api(`/api/report?base=${encodeURIComponent(C.base)}&head=${encodeURIComponent(C.head)}`); cmpGraph.fitted = false; }
   catch (e) { toast(e.message); return; }
   renderCompare();
 }
 const decided = (id) => S.cmp.report.review[id]?.decision;
+const exportUrl = (type) => `/api/export?base=${encodeURIComponent(S.cmp.base)}&head=${encodeURIComponent(S.cmp.head)}&type=${type}`;
+const exportMenu = () => `<details class="menu"><summary class="btn sm">Export</summary><div class="pop"><a class="mi" href="${esc(exportUrl('summary'))}" download>Summary (HTML)<small>text only</small></a><a class="mi" href="${esc(exportUrl('full'))}" download>Full report (HTML)<small>graph + images</small></a></div></details>`;
 function renderCompare() {
   const C = S.cmp, R = C.report; if (!R) return;
-  const runs = S.state.runs.filter((r) => r.status === 'done');
-  const opts = (cur) => runs.map((r) => `<option value="${esc(r.id)}"${r.id === cur ? ' selected' : ''}>${esc(r.label || r.id)}${r.id === S.state.baseline ? ' ◆' : ''}</option>`).join('');
+  const runs = doneRuns(), B = S.state.baselines || {};
+  const headRun = runs.find((r) => r.id === C.head) || {};
+  const same = runs.filter((r) => r.app === headRun.app);
+  const opt = (r, cur) => `<option value="${esc(r.id)}"${r.id === cur ? ' selected' : ''}>${esc(runName(r))}${B[r.app] === r.id ? ' · baseline' : ''}</option>`;
+  const apps = [...new Set(runs.map((r) => r.app))];
+  const headSel = apps.map((app) => `<optgroup label="${esc(appOf(runs.find((r) => r.app === app)))}">${runs.filter((r) => r.app === app).map((r) => opt(r, C.head)).join('')}</optgroup>`).join('');
+  const baseSel = same.filter((r) => r.id !== C.head).map((r) => opt(r, C.base)).join('');
   const review = R.screens.filter((s) => s.status !== 'same'), open = review.filter((s) => !decided(s.id));
   const rejected = review.filter((s) => decided(s.id) === 'rejected').length;
   const h1 = open.length ? `${open.length} of ${R.screens.length} screens need review` : rejected ? `Reviewed · ${rejected} rejected` : 'Reviewed · no open changes';
-  $('#cmphead').innerHTML = `<div><h1>${h1}</h1><p class="sub"><select class="sel2" data-c="base" aria-label="baseline run">${opts(C.base)}</select> → <select class="sel2" data-c="head" aria-label="head run">${opts(C.head)}</select> · ${esc(R.app || '')}</p></div>
+  $('#cmphead').innerHTML = `<div><p class="sub" style="margin:0 0 6px;color:var(--fg)">${esc(appOf(headRun))} <span style="color:var(--mut)">· ${esc(headRun.app || '')}</span></p><h1>${h1}</h1><p class="sub">base <select class="sel2" data-c="base" aria-label="baseline run">${baseSel}</select> → head <select class="sel2" data-c="head" aria-label="run to check">${headSel}</select></p></div>
     <div style="display:grid;gap:10px;justify-items:end"><div class="filters">${Object.entries(STATUS).map(([k, l]) => `<button class="fbtn${C.filter === k ? ' on' : ''}" data-f="${k}" aria-pressed="${C.filter === k}"><i class="k-${k}"></i>${l} ${R.summary[k]}</button>`).join('')}</div>
-    <div class="prog"><span>reviewed ${review.length - open.length}/${review.length}</span><span class="pb"><i style="width:${review.length ? ((review.length - open.length) / review.length) * 100 : 100}%"></i></span></div></div>`;
+    <div class="prog"><span>reviewed ${review.length - open.length}/${review.length}</span><span class="pb"><i style="width:${review.length ? ((review.length - open.length) / review.length) * 100 : 100}%"></i></span>${exportMenu()}</div></div>`;
   const nodes = R.screens.map((s) => ({ id: s.id, name: s.name, depth: s.depth, status: s.status, cls: decided(s.id) ? 'r-' + decided(s.id) : '', img: file(s.headImg || s.baseImg), placeholder: s.reason === 'crash' ? 'crash' : 'no screen', foot: s.status === 'changed' ? `Δ ${pct(s.ratio)}` : s.status === 'same' ? 'Δ 0.00 %' : s.reason || s.status }));
   const st = Object.fromEntries(R.screens.map((s) => [s.id, s.status]));
   const edges = R.edges.map((e) => ({ ...e, kind: st[e.to] === 'bad' ? 'bad' : st[e.to] === 'new' ? 'new' : '' }));
@@ -443,9 +499,11 @@ function shot(cap, img, s, marks) {
 function renderInspector() {
   const C = S.cmp, R = C.report, s = R.screens.find((x) => x.id === C.sel);
   const queue = R.screens.filter((x) => x.status !== 'same');
+  const rej = queue.filter((x) => decided(x.id) === 'rejected').length;
+  const done = queue.some((x) => !decided(x.id)) ? '' : `<div class="done${rej ? ' bad' : ''}" role="status"><b><i></i>All changes reviewed</b><p>${queue.length ? `${queue.length - rej} approved · ${rej} rejected · result ${rej ? 'failed' : 'passed'}` : 'no changes · result passed'}</p><div class="acts"><a class="btn sm pri" href="${esc(exportUrl('summary'))}" download>Summary (HTML)</a><a class="btn sm" href="${esc(exportUrl('full'))}" download>Full report (HTML)</a></div></div>`;
   const list = `<div class="sec"><h4>changes · ${queue.length}</h4><div class="qlist">${queue.map((x) => `<button class="q" data-sel="${esc(x.id)}"><i class="k-${x.status}"></i><span>${esc(x.name)}</span><small>${decided(x.id) || (x.status === 'changed' ? pct(x.ratio) : x.reason || x.status)}</small></button>`).join('') || '<p class="hint" style="padding:0 10px">No changes.</p>'}</div>
-    <div class="acts" style="margin-top:12px"><button class="btn" data-c="baseline"${C.head === S.state.baseline ? ' disabled' : ''}>Set head as baseline</button>${S.state.config.ai.ready ? `<button class="btn" data-c="notes">Notes via ${esc(S.state.config.ai.provider)}</button>` : ''}</div></div>`;
-  if (!s) { $('#cmpside').innerHTML = `<p class="hint" style="margin-top:0">Select a screen. Amber, blue and red need a decision.</p>${list}`; return; }
+    <div class="acts" style="margin-top:12px"><button class="btn" data-c="baseline"${Object.values(S.state.baselines || {}).includes(C.head) ? ' disabled' : ''}>Make head the baseline</button>${S.state.config.ai.ready ? `<button class="btn" data-c="notes">Notes via ${esc(S.state.config.ai.provider)}</button>` : ''}</div></div>`;
+  if (!s) { $('#cmpside').innerHTML = `${done}<p class="hint" style="margin-top:0">Select a screen. Amber, blue and red need a decision.</p>${list}`; return; }
   const dec = decided(s.id);
   const label = dec || STATUS[s.status];
   const next = queue.find((x) => !decided(x.id) && x.id !== s.id);
@@ -459,7 +517,7 @@ function renderInspector() {
   const acts = s.status === 'same' ? '<p class="hint" style="margin:0">Identical to the baseline.</p>'
     : dec ? `<button class="btn" data-d="">Undo</button>${next ? `<button class="btn" data-sel="${esc(next.id)}">Next open →</button>` : ''}`
     : `<button class="btn g" data-d="approved">${s.status === 'bad' ? 'Accept' : 'Approve'}</button><button class="btn r" data-d="rejected">Reject</button>`;
-  $('#cmpside').innerHTML = `<div class="it"><h3>${esc(s.name)}</h3><span class="tag t-${dec || s.status}">${esc(label)}</span></div>
+  $('#cmpside').innerHTML = `${done}<div class="it"><h3>${esc(s.name)}</h3><span class="tag t-${dec || s.status}">${esc(label)}</span></div>
     <p class="path">${['start', ...s.path].map(esc).join(' → ')}</p>${images}
     <table class="kv"><tr><td>screen</td><td>${esc(s.id)}</td></tr><tr><td>status</td><td>${esc(s.reason || STATUS[s.status])}</td></tr><tr><td>pixel Δ</td><td>${pct(s.ratio)}</td></tr><tr><td>regions</td><td>${s.boxes.length}</td></tr><tr><td>elements</td><td>${s.elements ?? '–'}</td></tr>${s.size ? `<tr><td>size</td><td>${s.size[0]}×${s.size[1]}</td></tr>` : ''}</table>
     ${note ? `<div class="note"><b>note · ${esc(note.model)} · ${esc(note.verdict)}</b>${esc(note.summary)}</div>` : ''}
@@ -472,27 +530,27 @@ $('#v-compare').addEventListener('click', async (e) => {
   else if (b.dataset.sel) { C.sel = b.dataset.sel; renderCompare(); }
   else if (b.dataset.m) { C.mode = b.dataset.m; renderInspector(); }
   else if ('d' in b.dataset) { const r = await api('/api/review', { base: C.base, head: C.head, screen: C.sel, decision: b.dataset.d || null }); C.report.review = r.review; renderCompare(); }
-  else if (b.dataset.c === 'baseline') { await api('/api/baseline', { run: C.head }); toast('baseline updated'); await loadState(); renderCompare(); }
+  else if (b.dataset.c === 'baseline') { await api('/api/baseline', { run: C.head }); toast('baseline updated'); await loadState(); C.base = ''; C.report = null; C.head = ''; loadCompare(); }
   else if (b.dataset.c === 'notes') { b.disabled = true; toast('requesting notes…'); try { C.report = await api('/api/notes', { base: C.base, head: C.head }); renderCompare(); } catch (err) { toast(err.message); b.disabled = false; } }
 });
 $('#v-compare').addEventListener('change', (e) => {
   const c = e.target.dataset.c;
   if (c === 'marks') { S.cmp.marks = e.target.checked; renderInspector(); }
-  if (c === 'base' || c === 'head') { S.cmp[c] = e.target.value; S.cmp.sel = null; S.cmp.report = null; loadCompare(); }
+  if (c === 'base' || c === 'head') { S.cmp[c] = e.target.value; if (c === 'head') S.cmp.base = ''; S.cmp.sel = null; S.cmp.report = null; loadCompare(); }
 });
 
 /* ---------- boot ---------- */
 async function loadState() {
   S.state = await api('/api/state');
   $('#ver').textContent = 'v' + S.state.version;
-  if (S.state.live.running) { S.live.running = true; S.live.id = S.state.live.runId; S.live.ask = S.state.live.ask; if (!S.live.log.length) { try { S.live.log = (await api('/api/log')).log; } catch {} } refreshAtlas(); }
+  if (S.state.live.running) { S.live.running = true; S.live.id = S.state.live.runId; S.live.logRun = S.live.id; S.live.ask = S.state.live.ask; if (!S.live.log.length) { try { S.live.log = (await api('/api/log')).log; } catch {} } refreshAtlas(); }
 }
 (async () => {
   try { await loadState(); } catch (e) { document.body.insertAdjacentHTML('beforeend', `<p class="hint" style="padding:20px">Cannot reach the snapcrawl server: ${esc(e.message)}</p>`); return; }
   fillSetup();
   const want = location.hash.slice(1);
-  const runs = S.state.runs.filter((r) => r.status === 'done');
-  show(['setup', 'run', 'compare'].includes(want) ? want : S.state.live.running ? 'run' : runs.length >= 2 ? 'compare' : 'setup');
+  const comparable = !!S.state.pair?.head;
+  show(['setup', 'run', 'compare'].includes(want) ? want : S.state.live.running ? 'run' : comparable ? 'compare' : 'setup');
   loadDevices();
 })();
 }

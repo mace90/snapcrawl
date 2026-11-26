@@ -11,6 +11,7 @@ import { crawl } from '../src/crawler.js';
 import { createDemo } from '../src/demo.js';
 import { buildReport } from '../src/diff.js';
 import { IosSimulator, hasBinary, listSimulators } from '../src/drivers/ios-sim.js';
+import { applyReview, decisionOf, renderReport, reportFileName, reviewState } from '../src/report.js';
 import { startServer } from '../src/server.js';
 import { Store } from '../src/store.js';
 import * as t from '../src/term.js';
@@ -31,7 +32,11 @@ ${t.bold('Commands')}
   crawl                       explore the app and capture every screen
   runs                        list previous runs
   baseline [run]              show or set the baseline run
-  diff [base] [head]          compare two runs (default: baseline vs latest)
+  diff [base] [head]          compare two runs (default: baseline vs the newest run after it)
+  review [base] [head]        list the changes and their decisions
+  review <id|all> <approve|reject|undo> [base] [head]
+                              decide like in the UI · "all" = every open change
+  report [base] [head]        write a standalone HTML report (default: summary)
   ui                          open the local web UI (graph, live crawl, review)
   demo                        create two sample runs to try the UI without a simulator
   config set <key> <value>    save a global setting, e.g. ai.provider anthropic
@@ -50,6 +55,8 @@ ${t.bold('Other options')}
   --port <n>                  ui port (default 4747)
   --no-open                   do not open the browser
   --ai                        add model notes to a diff (needs ai.provider)
+  --full                      report: graph, screenshots and pixel diffs
+  --out <file>                report: output file (default .snapcrawl/reports/)
   -h, --help  -v, --version
 `;
 
@@ -68,6 +75,8 @@ const { values: opt, positionals: pos } = parseArgs({
     'no-open': { type: 'boolean' },
     diff: { type: 'boolean' },
     ai: { type: 'boolean' },
+    full: { type: 'boolean' },
+    out: { type: 'string' },
     help: { type: 'boolean', short: 'h' },
     version: { type: 'boolean', short: 'v' },
   },
@@ -76,6 +85,8 @@ const { values: opt, positionals: pos } = parseArgs({
 const cmd = pos[0];
 const cfg = loadConfig(opt.config);
 const store = new Store(cfg.outDir).ensure();
+
+const run = (cmd, args) => new Promise((resolve) => execFile(cmd, args, (err) => resolve(!err)));
 
 function openBrowser(url) {
   const bin = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
@@ -98,7 +109,34 @@ function printReport(r) {
     console.log();
     t.table(rows, { head: ['id', 'screen', 'status', 'Δ px', 'note'] });
   }
-  console.log(`\n  ${t.gray('review in the browser:')} snapcrawl ui\n`);
+  console.log(`\n  ${t.gray('review in the browser:')} snapcrawl ui  ${t.gray('· or in the terminal:')} snapcrawl review\n`);
+}
+
+const RESULT = { passed: t.green, failed: t.red, 'in review': t.yellow };
+const DECISION = { approved: t.green, rejected: t.red, open: t.white, passed: t.green };
+const STATUS = { changed: 'changed', new: 'new', bad: 'broken' };
+const pct = (r) => (r != null ? (r * 100).toFixed(2) + ' %' : '');
+
+// Explicit runs work in any direction; otherwise the same default as the UI (store.defaultPair).
+function pickRuns(baseArg, headArg) {
+  if (headArg) {
+    const headRun = store.listRuns().find((r) => r.id === headArg && r.status === 'done');
+    if (!headRun) throw new Error(`no finished run "${headArg}" · snapcrawl runs lists them`);
+    const base = baseArg || store.baselineFor(headRun.app);
+    if (!base) throw new Error(`${headRun.appName || headRun.app} has no baseline yet · pass base and head explicitly`);
+    return { base, head: headRun.id };
+  }
+  const pair = store.defaultPair();
+  if (pair.error) throw new Error(pair.error);
+  return { base: baseArg || pair.base, head: pair.head };
+}
+
+// Reuse the stored report so review decisions made in the UI or CLI are kept.
+const loadReport = ({ base, head }) => store.readReport(base, head) || buildReport({ store, baseId: base, headId: head, cfg });
+
+function printState(r) {
+  const st = reviewState(r);
+  console.log(`  ${t.gray('reviewed')} ${st.reviewed}/${st.total}  ${t.gray('approved')} ${st.approved}  ${t.gray('rejected')} ${st.rejected}  ${t.gray('result')} ${RESULT[st.result](st.result)}`);
 }
 
 const commands = {
@@ -111,14 +149,20 @@ const commands = {
     checks.push(isMac ? t.ok('macOS') : t.fail(`${process.platform} · the iOS Simulator needs macOS`));
     const xcrun = await hasBinary('xcrun');
     checks.push(xcrun ? t.ok('xcrun (Xcode command line tools)') : t.fail('xcrun missing · install Xcode from the App Store, then: xcode-select --install'));
+    if (xcrun) {
+      const simctl = await run('xcrun', ['simctl', 'help']);
+      checks.push(simctl ? t.ok('simctl (Xcode)') : t.fail('simctl missing · install Xcode, then: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer'));
+      const license = await run('xcodebuild', ['-license', 'check']);
+      checks.push(license ? t.ok('Xcode license accepted') : t.fail('Xcode license not accepted · sudo xcodebuild -license accept'));
+    }
     const idb = await hasBinary('idb');
     checks.push(idb ? t.ok('idb') : t.fail('idb missing · pipx install fb-idb'));
     const companion = await hasBinary('idb_companion');
-    checks.push(companion ? t.ok('idb_companion') : t.fail('idb_companion missing · brew tap facebook/fb && brew install idb-companion'));
+    checks.push(companion ? t.ok('idb_companion') : t.fail('idb_companion missing · brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion'));
     if (xcrun) {
       try {
         const booted = (await listSimulators()).filter((s) => s.state === 'Booted');
-        checks.push(booted.length ? t.ok(`booted simulator: ${booted.map((b) => `${b.name} (${b.runtime})`).join(', ')}`) : t.warn('no simulator booted · xcrun simctl boot "iPhone 16" && open -a Simulator'));
+        checks.push(booted.length ? t.ok(`booted simulator: ${booted.map((b) => `${b.name} (${b.runtime})`).join(', ')}`) : t.warn('no simulator booted · snapcrawl devices, then: xcrun simctl boot "<name>"'));
       } catch (e) {
         checks.push(t.fail(e.message));
       }
@@ -176,36 +220,33 @@ const commands = {
     const atlas = await crawl({ driver, cfg, store, io, label: opt.label || '' });
     rl.close();
     if (atlas.meta.status !== 'done') process.exitCode = 1;
-    if (!store.baseline && atlas.meta.status === 'done') {
-      store.baseline = atlas.meta.id;
-      console.log(`\n  ${t.gray('first run → set as baseline:')} ${atlas.meta.id}`);
-    } else if (opt.diff && store.baseline && store.baseline !== atlas.meta.id) {
-      printReport(buildReport({ store, baseId: store.baseline, headId: atlas.meta.id, cfg }));
+    const baseline = store.baselineFor(atlas.meta.app);
+    if (!baseline && atlas.meta.status === 'done') {
+      store.setBaseline(atlas.meta.id);
+      console.log(`\n  ${t.gray('first run of this app → saved as baseline:')} ${atlas.meta.id}`);
+    } else if (opt.diff && baseline && baseline !== atlas.meta.id) {
+      printReport(buildReport({ store, baseId: baseline, headId: atlas.meta.id, cfg }));
     }
     console.log(`\n  ${t.gray('next:')} snapcrawl ${opt.diff ? 'ui' : 'diff'}\n`);
   },
 
   async runs() {
     t.title('runs', store.root);
-    const b = store.baseline;
+    const b = store.readBaselines();
     const runs = store.listRuns();
     if (!runs.length) return console.log(t.gray('  no runs yet · snapcrawl crawl or snapcrawl demo\n'));
-    t.table(runs.map((r) => [r.id === b ? t.white('◆') : ' ', r.id, r.label, r.app, `${r.screens} screens`, r.crashes ? t.red(`${r.crashes} crash`) : '', t.gray(r.status)]), { head: ['', 'run', 'label', 'app', 'size', '', 'status'] });
-    console.log(t.gray('\n  ◆ baseline\n'));
+    t.table(runs.map((r) => [b[r.app] === r.id ? t.white('◆') : ' ', r.id, r.label, r.appName || r.app, `${r.screens} screens`, r.crashes ? t.red(`${r.crashes} crash`) : '', t.gray(r.status)]), { head: ['', 'run', 'label', 'app', 'size', '', 'status'] });
+    console.log(t.gray('\n  ◆ baseline of its app\n'));
   },
 
   async baseline() {
-    if (pos[1]) {
-      store.readRun(pos[1]);
-      store.baseline = pos[1];
-    }
-    console.log(store.baseline ? `baseline: ${store.baseline}` : t.gray('no baseline yet'));
+    if (pos[1]) console.log(t.ok(`baseline for ${store.setBaseline(pos[1])}: ${pos[1]}`));
+    const all = Object.entries(store.readBaselines());
+    if (!pos[1]) all.length ? t.table(all.map(([app, id]) => [app, id]), { head: ['app', 'baseline'] }) : console.log(t.gray('no baseline yet'));
   },
 
   async diff() {
-    const base = pos[1] || store.baseline;
-    const head = pos[2] || store.latest(base);
-    if (!base || !head) throw new Error('Need two runs. Crawl twice, or try: snapcrawl demo');
+    const { base, head } = pickRuns(pos[1], pos[2]);
     let report = buildReport({ store, baseId: base, headId: head, cfg });
     if (opt.ai) {
       t.logLine('INFO', `notes via ${cfg.ai.provider}/${cfg.ai.model}`);
@@ -215,10 +256,55 @@ const commands = {
     if (report.summary.bad) process.exitCode = 1;
   },
 
+  async review() {
+    const action = pos[2];
+    if (['approve', 'reject', 'undo'].includes(action)) {
+      const r = loadReport(pickRuns(pos[3], pos[4]));
+      const ids = applyReview(r, pos[1], action);
+      store.writeReport(r);
+      t.title('review', `${r.base.label || r.base.id} → ${r.head.label || r.head.id}`);
+      const names = ids.map((id) => r.screens.find((s) => s.id === id).name);
+      console.log('  ' + (ids.length ? t.ok(`${action} · ${ids.length} screen${ids.length === 1 ? '' : 's'}: ${names.join(', ')}`) : t.gray(`nothing to ${action}`)));
+      console.log();
+      printState(r);
+      console.log(`\n  ${t.gray('next:')} snapcrawl ${reviewState(r).open ? 'review' : 'report'}\n`);
+      return;
+    }
+    if (['approve', 'reject', 'undo', 'all'].includes(pos[1])) throw new Error('usage: snapcrawl review <screen-id|all> <approve|reject|undo>');
+    const r = loadReport(pickRuns(pos[1], pos[2]));
+    const changes = r.screens.filter((s) => s.status !== 'same');
+    const open = changes.filter((s) => decisionOf(r, s) === 'open');
+    t.title('review', `${r.base.label || r.base.id} → ${r.head.label || r.head.id} · ${open.length} of ${changes.length} changes open`);
+    // open changes first, decided ones below so the progress stays visible
+    const rows = [...open, ...changes.filter((s) => !open.includes(s))].map((s) => {
+      const d = decisionOf(r, s);
+      return [s.id, s.name, { changed: t.yellow, new: t.cyan, bad: t.red }[s.status](s.reason || STATUS[s.status]), pct(s.ratio), DECISION[d](d)];
+    });
+    if (rows.length) t.table(rows, { head: ['id', 'screen', 'status', 'Δ px', 'decision'] });
+    else console.log(t.gray('  no changes'));
+    console.log();
+    printState(r);
+    console.log(`\n  ${t.gray('decide:')} snapcrawl review <id|all> <approve|reject|undo>\n`);
+  },
+
+  async report() {
+    const r = loadReport(pickRuns(pos[1], pos[2]));
+    const type = opt.full ? 'full' : 'summary';
+    const out = path.resolve(opt.out || path.join(store.reportsDir, reportFileName(r, type)));
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, renderReport({ store, report: r, type, version: pkg.version }));
+    t.title('report', `${type} · ${r.base.label || r.base.id} → ${r.head.label || r.head.id}`);
+    console.log('  ' + t.ok(out) + t.gray(`  ${(fs.statSync(out).size / 1024).toFixed(1)} KB`));
+    console.log();
+    printState(r);
+    console.log();
+  },
+
   async ui() {
     const port = Number(opt.port || 4747);
-    await startServer({ store, cfg, port, version: pkg.version });
-    const url = `http://localhost:${port}`;
+    const { port: actual } = await startServer({ store, cfg, port, version: pkg.version });
+    const url = `http://localhost:${actual}`;
+    if (actual !== port) console.log(t.gray(`  port ${port} is busy · using ${actual}`));
     t.title('ui', url);
     console.log(t.gray('  ctrl-c to stop\n'));
     if (!opt['no-open']) openBrowser(url);

@@ -241,7 +241,10 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
     await driver.resolve();
     atlas.meta.device = { platform: driver.platform, name: driver.name, runtime: driver.runtime, udid: driver.udid };
     log('INFO', `device ${driver.name} · ${driver.runtime} · ${driver.udid}`);
-    log('INFO', `app.launch ${cfg.app.bundleId}`);
+    try {
+      atlas.meta.appName = (await driver.listApps()).find((a) => a.bundleId === cfg.app.bundleId)?.name || '';
+    } catch {}
+    log('INFO', `app.launch ${atlas.meta.appName ? atlas.meta.appName + ' · ' : ''}${cfg.app.bundleId}`);
     event('run', { id: runId, device: atlas.meta.device });
 
     const root = await register(await launch(), 0, [], null);

@@ -196,7 +196,7 @@ function buildRun(store, { id, label, created, version }) {
 
   const atlas = {
     version: 1,
-    meta: { id, label, created, app: 'com.pulse.app', device: { platform: 'ios-sim', name: 'iPhone 16 (demo)', runtime: 'iOS 18.2', udid: 'demo' }, status: 'done', demo: true, durationMs: head ? 221_000 : 214_000 },
+    meta: { id, label, created, app: 'com.pulse.app', appName: 'Pulse', device: { platform: 'ios-sim', name: 'iPhone 16 (demo)', runtime: 'iOS 18.2', udid: 'demo' }, status: 'done', demo: true, durationMs: head ? 221_000 : 214_000 },
     screens,
     edges,
   };
@@ -208,7 +208,7 @@ export function createDemo(store) {
   store.ensure();
   const base = buildRun(store, { id: 'demo-v2.3.0', label: 'v2.3.0', created: '2026-11-20T09:00:00.000Z', version: 1 });
   const head = buildRun(store, { id: 'demo-v2.4.0', label: 'v2.4.0', created: '2026-11-26T09:00:00.000Z', version: 2 });
-  store.baseline = base.meta.id;
+  store.setBaseline(base.meta.id);
   return { base: base.meta.id, head: head.meta.id };
 }
 
