@@ -31,7 +31,7 @@ ${t.bold('Commands')}
   crawl                       explore the app and capture every screen
   runs                        list previous runs
   baseline [run]              show or set the baseline run
-  diff [base] [head]          compare two runs (default: baseline vs latest)
+  diff [base] [head]          compare two runs (default: latest run vs its app's baseline)
   ui                          open the local web UI (graph, live crawl, review)
   demo                        create two sample runs to try the UI without a simulator
   config set <key> <value>    save a global setting, e.g. ai.provider anthropic
@@ -77,6 +77,8 @@ const cmd = pos[0];
 const cfg = loadConfig(opt.config);
 const store = new Store(cfg.outDir).ensure();
 
+const run = (cmd, args) => new Promise((resolve) => execFile(cmd, args, (err) => resolve(!err)));
+
 function openBrowser(url) {
   const bin = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
   execFile(bin, [url], () => {});
@@ -111,14 +113,20 @@ const commands = {
     checks.push(isMac ? t.ok('macOS') : t.fail(`${process.platform} · the iOS Simulator needs macOS`));
     const xcrun = await hasBinary('xcrun');
     checks.push(xcrun ? t.ok('xcrun (Xcode command line tools)') : t.fail('xcrun missing · install Xcode from the App Store, then: xcode-select --install'));
+    if (xcrun) {
+      const simctl = await run('xcrun', ['simctl', 'help']);
+      checks.push(simctl ? t.ok('simctl (Xcode)') : t.fail('simctl missing · install Xcode, then: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer'));
+      const license = await run('xcodebuild', ['-license', 'check']);
+      checks.push(license ? t.ok('Xcode license accepted') : t.fail('Xcode license not accepted · sudo xcodebuild -license accept'));
+    }
     const idb = await hasBinary('idb');
     checks.push(idb ? t.ok('idb') : t.fail('idb missing · pipx install fb-idb'));
     const companion = await hasBinary('idb_companion');
-    checks.push(companion ? t.ok('idb_companion') : t.fail('idb_companion missing · brew tap facebook/fb && brew install idb-companion'));
+    checks.push(companion ? t.ok('idb_companion') : t.fail('idb_companion missing · brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion'));
     if (xcrun) {
       try {
         const booted = (await listSimulators()).filter((s) => s.state === 'Booted');
-        checks.push(booted.length ? t.ok(`booted simulator: ${booted.map((b) => `${b.name} (${b.runtime})`).join(', ')}`) : t.warn('no simulator booted · xcrun simctl boot "iPhone 16" && open -a Simulator'));
+        checks.push(booted.length ? t.ok(`booted simulator: ${booted.map((b) => `${b.name} (${b.runtime})`).join(', ')}`) : t.warn('no simulator booted · snapcrawl devices, then: xcrun simctl boot "<name>"'));
       } catch (e) {
         checks.push(t.fail(e.message));
       }
@@ -176,36 +184,38 @@ const commands = {
     const atlas = await crawl({ driver, cfg, store, io, label: opt.label || '' });
     rl.close();
     if (atlas.meta.status !== 'done') process.exitCode = 1;
-    if (!store.baseline && atlas.meta.status === 'done') {
-      store.baseline = atlas.meta.id;
-      console.log(`\n  ${t.gray('first run → set as baseline:')} ${atlas.meta.id}`);
-    } else if (opt.diff && store.baseline && store.baseline !== atlas.meta.id) {
-      printReport(buildReport({ store, baseId: store.baseline, headId: atlas.meta.id, cfg }));
+    const baseline = store.baselineFor(atlas.meta.app);
+    if (!baseline && atlas.meta.status === 'done') {
+      store.setBaseline(atlas.meta.id);
+      console.log(`\n  ${t.gray('first run of this app → saved as baseline:')} ${atlas.meta.id}`);
+    } else if (opt.diff && baseline && baseline !== atlas.meta.id) {
+      printReport(buildReport({ store, baseId: baseline, headId: atlas.meta.id, cfg }));
     }
     console.log(`\n  ${t.gray('next:')} snapcrawl ${opt.diff ? 'ui' : 'diff'}\n`);
   },
 
   async runs() {
     t.title('runs', store.root);
-    const b = store.baseline;
+    const b = store.readBaselines();
     const runs = store.listRuns();
     if (!runs.length) return console.log(t.gray('  no runs yet · snapcrawl crawl or snapcrawl demo\n'));
-    t.table(runs.map((r) => [r.id === b ? t.white('◆') : ' ', r.id, r.label, r.app, `${r.screens} screens`, r.crashes ? t.red(`${r.crashes} crash`) : '', t.gray(r.status)]), { head: ['', 'run', 'label', 'app', 'size', '', 'status'] });
-    console.log(t.gray('\n  ◆ baseline\n'));
+    t.table(runs.map((r) => [b[r.app] === r.id ? t.white('◆') : ' ', r.id, r.label, r.appName || r.app, `${r.screens} screens`, r.crashes ? t.red(`${r.crashes} crash`) : '', t.gray(r.status)]), { head: ['', 'run', 'label', 'app', 'size', '', 'status'] });
+    console.log(t.gray('\n  ◆ baseline of its app\n'));
   },
 
   async baseline() {
-    if (pos[1]) {
-      store.readRun(pos[1]);
-      store.baseline = pos[1];
-    }
-    console.log(store.baseline ? `baseline: ${store.baseline}` : t.gray('no baseline yet'));
+    if (pos[1]) console.log(t.ok(`baseline for ${store.setBaseline(pos[1])}: ${pos[1]}`));
+    const all = Object.entries(store.readBaselines());
+    if (!pos[1]) all.length ? t.table(all.map(([app, id]) => [app, id]), { head: ['app', 'baseline'] }) : console.log(t.gray('no baseline yet'));
   },
 
   async diff() {
-    const base = pos[1] || store.baseline;
-    const head = pos[2] || store.latest(base);
-    if (!base || !head) throw new Error('Need two runs. Crawl twice, or try: snapcrawl demo');
+    const baselines = store.readBaselines();
+    const runs = store.listRuns().filter((r) => r.status === 'done');
+    const headRun = pos[2] ? runs.find((r) => r.id === pos[2]) : runs.find((r) => baselines[r.app] && baselines[r.app] !== r.id);
+    const head = headRun?.id;
+    const base = pos[1] || (headRun && baselines[headRun.app]);
+    if (!base || !head) throw new Error('Need two runs of the same app. Crawl it again after your next build, or try: snapcrawl demo');
     let report = buildReport({ store, baseId: base, headId: head, cfg });
     if (opt.ai) {
       t.logLine('INFO', `notes via ${cfg.ai.provider}/${cfg.ai.model}`);
@@ -217,8 +227,9 @@ const commands = {
 
   async ui() {
     const port = Number(opt.port || 4747);
-    await startServer({ store, cfg, port, version: pkg.version });
-    const url = `http://localhost:${port}`;
+    const { port: actual } = await startServer({ store, cfg, port, version: pkg.version });
+    const url = `http://localhost:${actual}`;
+    if (actual !== port) console.log(t.gray(`  port ${port} is busy · using ${actual}`));
     t.title('ui', url);
     console.log(t.gray('  ctrl-c to stop\n'));
     if (!opt['no-open']) openBrowser(url);

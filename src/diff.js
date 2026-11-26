@@ -136,6 +136,7 @@ export function buildReport({ store, baseId, headId, cfg }) {
     base: { id: baseId, label: base.meta.label, device: base.meta.device?.name || '' },
     head: { id: headId, label: head.meta.label, device: head.meta.device?.name || '' },
     app: head.meta.app,
+    appName: head.meta.appName || '',
     summary: { screens: screens.length, same: count('same'), changed: count('changed'), new: count('new'), bad: count('bad') },
     screens,
     edges,

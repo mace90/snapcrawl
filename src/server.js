@@ -77,7 +77,7 @@ export function startServer({ store, cfg, port = 4747, version, driverFactory = 
     'GET /api/state': () => ({
       version,
       runs: store.listRuns(),
-      baseline: store.baseline,
+      baselines: store.readBaselines(),
       live: { running: live.running, runId: live.runId, ask: live.ask && { kind: live.ask.kind, prompt: live.ask.prompt } },
       config: {
         bundleId: cfg.app.bundleId,
@@ -116,8 +116,8 @@ export function startServer({ store, cfg, port = 4747, version, driverFactory = 
       return { review: report.review };
     },
     'POST /api/baseline': (q, body) => {
-      store.baseline = body.run;
-      return { baseline: store.baseline };
+      store.setBaseline(body.run);
+      return { baselines: store.readBaselines() };
     },
     'POST /api/notes': async (q, body) => {
       const report = store.readReport(body.base, body.head);
@@ -134,13 +134,19 @@ export function startServer({ store, cfg, port = 4747, version, driverFactory = 
       const driver = driverFactory({ udid: body.udid || run.device.udid, bundleId: run.app.bundleId });
       Object.assign(live, { running: true, runId: null, ask: null, log: [], abort: false });
       crawl({ driver, cfg: run, store, io, label: body.label || '' })
+        .then((atlas) => {
+          if (atlas.meta.status === 'done' && !store.baselineFor(atlas.meta.app)) {
+            store.setBaseline(atlas.meta.id);
+            io.log('INFO', `first run of ${atlas.meta.appName || atlas.meta.app} · saved as baseline`);
+          }
+        })
         .catch((e) => io.log('ERROR', e.message))
         .finally(() => {
           live.running = false;
           live.ask = null;
           broadcast('state', { running: false });
         });
-      return { started: true };
+      return { started: true, baseline: store.baselineFor(run.app.bundleId) };
     },
     'POST /api/answer': (q, body) => {
       if (!live.ask) return { ok: false };
@@ -183,5 +189,14 @@ export function startServer({ store, cfg, port = 4747, version, driverFactory = 
     }
   });
 
-  return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve(server)));
+  // Take the next free port if the requested one is busy (e.g. another snapcrawl ui).
+  return new Promise((resolve, reject) => {
+    let p = port;
+    server.on('error', (e) => {
+      if (e.code === 'EADDRINUSE' && p < port + 20) server.listen(++p, '127.0.0.1');
+      else reject(e);
+    });
+    server.on('listening', () => resolve({ server, port: p }));
+    server.listen(p, '127.0.0.1');
+  });
 }

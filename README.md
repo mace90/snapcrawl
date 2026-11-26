@@ -42,9 +42,13 @@ $ snapcrawl crawl --bundle com.acme.app --label v2.4.0 --diff
 Install the tools once:
 
 ```bash
-xcode-select --install                                # command line tools
-brew tap facebook/fb && brew install idb-companion     # idb server
-brew install pipx && pipx install fb-idb              # idb client
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+sudo xcodebuild -license accept
+brew tap facebook/fb
+brew trust facebook/fb            # newer Homebrew asks you to trust third-party taps
+brew install idb-companion        # idb server
+brew install pipx && pipx ensurepath
+pipx install fb-idb               # idb client (open a new terminal afterwards)
 ```
 
 ## Install
@@ -73,20 +77,30 @@ snapcrawl ui       # opens http://localhost:4747
 ## Quick start
 
 ```bash
-xcrun simctl boot "iPhone 16" && open -a Simulator
-# install your build: xcrun simctl install booted path/to/MyApp.app
+snapcrawl devices                                       # pick a simulator name from this list
+xcrun simctl boot "iPhone 17"
+open "$(xcode-select -p)/Applications/Simulator.app"    # optional: watch it tap
+# install your build: Run in Xcode on that simulator, or xcrun simctl install booted MyApp.app
 
 cd my-app-repo
 snapcrawl init                     # writes snapcrawl.config.json
 snapcrawl apps                     # find your bundle id
-snapcrawl crawl --bundle com.acme.app --label v2.3.0    # first run becomes the baseline
+snapcrawl crawl --bundle com.acme.app --label v2.3.0    # first run of an app becomes its baseline
 
 # … install the next build …
 snapcrawl crawl --bundle com.acme.app --label v2.4.0 --diff
 snapcrawl ui
 ```
 
-Everything can also be started from the browser: `snapcrawl ui` → **Setup** → pick simulator and app → **Start crawl**.
+## Using the web UI
+
+`snapcrawl ui` opens the same workflow in the browser:
+
+1. **Setup** – pick a simulator and an app, add a login if needed, start. The footer tells you whether this run becomes the app's baseline or is compared with it.
+2. **Run** – the graph grows live, with the latest screenshot and the log. When the crawl needs a 2FA code or a manual login it pauses here. Afterwards every previous run is listed per app and can be opened.
+3. **Compare** – the newest run of an app against its baseline. Filter by status, open a screen to see base, head and pixel diff, approve or reject, or make the new run the baseline.
+
+Every app has its own baseline, so runs of different apps are never compared with each other.
 
 ## Logins and two-factor authentication
 
@@ -172,9 +186,9 @@ Then `snapcrawl diff --ai`, or **Notes** in the web UI. Global settings live in 
 | `snapcrawl apps` | list apps on the booted simulator |
 | `snapcrawl init` | write `snapcrawl.config.json` |
 | `snapcrawl crawl` | explore the app · `--bundle --udid --label --max-depth --max-screens --mfa --diff` |
-| `snapcrawl runs` | list runs (◆ marks the baseline) |
-| `snapcrawl baseline [run]` | show or set the baseline |
-| `snapcrawl diff [base] [head]` | compare runs (default: baseline vs latest) · `--ai` |
+| `snapcrawl runs` | list runs (◆ marks each app's baseline) |
+| `snapcrawl baseline [run]` | show baselines, or make a run the baseline of its app |
+| `snapcrawl diff [base] [head]` | compare runs (default: newest run vs its app's baseline) · `--ai` |
 | `snapcrawl ui` | local web UI · `--port --no-open` |
 | `snapcrawl demo` | create sample runs |
 | `snapcrawl config set <key> <value>` | global settings |
@@ -192,7 +206,7 @@ Then `snapcrawl diff --ai`, or **Notes** in the web UI. Global settings live in 
 
 ```
 .snapcrawl/
-├── baseline                     # id of the baseline run
+├── baselines.json               # baseline run per app
 ├── runs/<run-id>/
 │   ├── atlas.json               # screens, edges, paths, device info
 │   └── screens/s000.png …
@@ -221,9 +235,14 @@ Drivers implement one small interface (`resolve`, `listApps`, `launch`, `isRunni
 
 ## Troubleshooting
 
+- **`unable to find utility "simctl"`**: only the command line tools are active. `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`
+- **`You have not agreed to the Xcode license`**: `sudo xcodebuild -license accept`
+- **`Refusing to load formula … from untrusted tap`**: `brew trust facebook/fb`
+- **`Unable to find application named 'Simulator'`**: `open "$(xcode-select -p)/Applications/Simulator.app"`. The window is optional; a booted simulator is enough.
 - **`idb: command not found`** after `pipx install fb-idb`: run `pipx ensurepath` and open a new terminal.
 - **idb fails on a very new Python:** `pipx install --python python3.11 fb-idb`.
-- **No booted simulator:** `xcrun simctl boot "iPhone 16" && open -a Simulator`.
+- **No booted simulator:** `snapcrawl devices`, then `xcrun simctl boot "<name>"`.
+- **Port 4747 busy:** `snapcrawl ui` picks the next free port automatically.
 - **Taps land in the wrong place:** raise `crawl.settleMs` so animations finish before the screen is read.
 
 ## License
