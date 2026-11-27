@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import pixelmatch from 'pixelmatch';
 import pngjs from 'pngjs';
+import { actionHints } from './pairing.js';
 import { similarity } from './signature.js';
 
 const { PNG } = pngjs;
@@ -69,8 +70,9 @@ export function comparePng(fileA, fileB, outFile, { threshold = 0.1, ignoreStatu
   return { ratio: changed / (w * h), boxes: changed ? boxesFrom(out.data, w, h) : [], width: w, height: h };
 }
 
-// Screens are matched across runs by the path of taps that reached them (stable across
-// visual changes), then by structural fingerprint, then by signature similarity.
+// Screens are matched across runs by the baseline screen a run that followed the baseline
+// recorded (s.base), then by the path of taps that reached them (stable across visual
+// changes), then by structural fingerprint, then by signature similarity.
 // One-time screens (onboarding) are compared only when both runs have them.
 // Measured status bar of either run (real devices report it), as a share of the screen height.
 function statusBarRatio(pairs) {
@@ -106,8 +108,14 @@ export function buildReport({ store, baseId, headId, cfg }) {
 
   const img = (run, s) => (s?.screenshot ? `runs/${run}/${s.screenshot}` : null);
 
+  // a run that followed this baseline knows for each screen which baseline screen it is
+  const followed = head.meta.followed === baseId;
+  const baseById = new Map(base.screens.map((s) => [s.id, s]));
+  const pairsOf = []; // [head screen, base screen, report entry] for the button hints
+
   for (const h of head.screens) {
-    let b = h.oneTime ? null : baseByKey.get(pathKey(h));
+    let b = followed && h.base ? baseById.get(h.base) || null : null;
+    if (!b || used.has(b.id)) b = h.oneTime ? null : baseByKey.get(pathKey(h));
     if (!b || used.has(b.id)) b = h.crash ? null : baseByFp.get(h.fp);
     if (b && used.has(b.id)) b = null;
     if (!b && !h.crash) b = similar(h);
@@ -129,6 +137,7 @@ export function buildReport({ store, baseId, headId, cfg }) {
       const changed = r.ratio >= cfg.diff.minChangedRatio;
       Object.assign(entry, { status: changed ? 'changed' : 'same', ratio: r.ratio, boxes: changed ? r.boxes : [], size: [r.width, r.height], diffImg: `diffs/${baseId}__${headId}/${file}`, sizeMismatch: !!r.sizeMismatch });
     }
+    if (b && !h.crash && !b.crash) pairsOf.push([h, b, entry]);
     idMap.set(h.id, entry.id);
     if (b) baseIdMap.set(b.id, entry.id);
     screens.push(entry);
@@ -140,6 +149,22 @@ export function buildReport({ store, baseId, headId, cfg }) {
     baseIdMap.set(b.id, id);
     const gone = b.oneTime ? { status: 'skipped', reason: 'one-time (skipped)', oneTime: true } : { status: 'bad', reason: 'unreachable' };
     screens.push({ id, name: b.name, depth: b.depth, path: b.path.map((r) => r.label || r.type), elements: b.elements, ...gone, baseImg: img(baseId, b), headImg: null, diffImg: null, ratio: null, boxes: [], size: null });
+  }
+
+  // Buttons renamed, moved or removed, from the label and the place of every action. For a
+  // renamed or moved button: does it still lead to the screen its old self led to?
+  const target = (run, from, label) => run.edges.find((e) => e.from === from && e.action?.label === label)?.to;
+  for (const [h, b, entry] of pairsOf) {
+    const hints = actionHints(h.actions, h.size, b.actions, b.size);
+    if (!hints) continue;
+    const leads = (newLabel, oldLabel) => {
+      const ht = target(head, h.id, newLabel);
+      const bt = target(base, b.id, oldLabel);
+      return ht && bt ? (idMap.get(ht) && idMap.get(ht) === baseIdMap.get(bt)) : null; // null: not known
+    };
+    for (const r of hints.renamed) r.same = leads(r.to, r.from);
+    for (const m of hints.moved) m.same = leads(m.label, m.label);
+    entry.hints = hints;
   }
 
   const edges = [];

@@ -12,6 +12,7 @@ export const ACTIONS = [
   { id: 'wda-status', title: 'WebDriverAgent status', ui: 'Setup → iPhone · status line', cli: 'wda status', route: 'GET /api/wda/status' },
   { id: 'apps', title: 'List installed apps', ui: 'Setup → App · installed apps', cli: 'apps', route: 'GET /api/apps' },
   { id: 'crawl', title: 'Crawl with all options', ui: 'Setup → Start crawl', cli: 'crawl', route: 'POST /api/crawl' },
+  { id: 'crawl-pair', title: 'Crawl a baseline build, then a second build against it', ui: 'Setup → App · then crawl', cli: 'crawl --then <bundle>', route: 'POST /api/crawl' },
   { id: 'continue', title: 'Continue after Prepare, a login or a code', ui: 'Run → Continue', cli: 'crawl --prepare', route: 'POST /api/answer' },
   { id: 'stop', title: 'Stop a running crawl', ui: 'Run → Stop', cli: 'crawl', route: 'POST /api/stop' },
   { id: 'runs', title: 'List runs', ui: 'Run → runs', cli: 'runs', route: 'GET /api/runs' },

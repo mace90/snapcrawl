@@ -192,6 +192,7 @@ Every action has a place in the web UI, a CLI command and an API route, all call
 | WebDriverAgent status | Setup → iPhone · status line | `snappcrawl wda status` | `GET /api/wda/status` |
 | List installed apps | Setup → App · installed apps | `snappcrawl apps` | `GET /api/apps` |
 | Crawl with all options | Setup → Start crawl | `snappcrawl crawl` | `POST /api/crawl` |
+| Crawl a baseline build, then a second build against it | Setup → App · then crawl | `snappcrawl crawl --then <bundle>` | `POST /api/crawl` (`then`) |
 | Continue after Prepare, a login or a code | Run → Continue | `snappcrawl crawl --prepare` | `POST /api/answer` |
 | Stop a running crawl | Run → Stop | `snappcrawl crawl` | `POST /api/stop` |
 | List runs | Run → runs | `snappcrawl runs` | `GET /api/runs` |
@@ -227,6 +228,64 @@ snappcrawl baseline 20261126-091500-v2.4.0   # optional: v2.4.0 is the new refer
 ```
 
 `review all approve` and `review all reject` only touch screens that are still open; earlier decisions stay. `review all undo` clears every decision.
+
+### Two builds side by side
+
+Often both builds are installed at the same time, each under its own bundle id (for example `com.acme.app` from the App Store build and `com.acme.app.beta` from your branch). Then one command does it all:
+
+```bash
+snappcrawl crawl --bundle com.acme.app --then com.acme.app.beta --label 2.4.0
+```
+
+1. `com.acme.app` is crawled and becomes its baseline (run `…-2.4.0-baseline`).
+2. `com.acme.app.beta` is crawled **against** it (run `…-2.4.0-test`). It [follows the baseline](#comparable-runs-following-the-baseline) and takes over its intro mode, as if it were the same app.
+3. The two are compared and the result is printed, as with `--diff`.
+
+The test build gets no baseline of its own. `diff`, `review`, `report` and the Compare tab without arguments then compare exactly these two runs. A single run of the second build against the first build's baseline: `snappcrawl crawl --bundle com.acme.app.beta --against com.acme.app` (`crawl.against`). In the web UI: **Setup → App → then crawl**, or *compare with the baseline of another app*.
+
+The crawl options apply to both runs. `--reinstall` installs one build and does not go with `--then`; use `--intro fresh`, which resets each app before its run.
+
+## Comparable runs: following the baseline
+
+Two crawls of the same app rarely click through it the same way on their own. An animation that is not finished, a sheet that is still half open or a list that loaded a moment later is enough. One tap then lands on another view, that view takes a place in the screen limit, and everything after it shifts: a few screens turn up as *new*, others as *unreachable*, though nothing changed.
+
+So a run with a baseline for its app **repeats the baseline first**:
+
+1. **Same screens, same order.** The baseline's screens are visited in the order the baseline explored them (`meta.order`). On each one, its actions come in the baseline's order. Actions the baseline did not have come after them.
+2. **Same destination.** When a tap leads somewhere other than in the baseline, the app is started fresh, the path is replayed and the tap is tried once more. The log shows `led elsewhere than in the baseline ("Profil") · once more after a fresh start`. Only when the retry also lands elsewhere is the screen kept as it is, as a real difference. A screen that is recognisably the expected one with changes (a new button, other texts; similarity from 0.6) needs no retry.
+3. **The baseline's screens always count.** At the screen limit the run still finishes the baseline's screens, along the baseline's taps. The limit applies to what is new; new screens past it are counted in the log, not kept.
+4. **Exploration after that.** Once the baseline is repeated, the rest is explored as usual (see [Crawl order](#crawl-order)).
+
+Every screen stores which baseline screen it is (`base` in `atlas.json`), and `diff` matches by that first. At the end the log says `baseline followed · 12 of 12 screens found again`.
+
+### Label and place: renamed and moved buttons
+
+Every action is stored with its label **and its place** on the screen (the centre of what was tapped). A button of the new run is paired with one of the baseline in this order: the same accessibility id, the same label, then the same place and type. Places are compared relative to the screen size (within about 6 % of the width and 3 % of the height), so runs on different iPhones still pair.
+
+| Label | Place | Counts as | While crawling |
+|---|---|---|---|
+| same | same | the same button | |
+| other | same | **renamed** | tapped as the baseline's button, the screen behind it is matched to the baseline's screen |
+| same | other | **moved** | tapped as the baseline's button |
+| | | **removed** | a baseline button with no partner |
+
+```
+follow s000 "Profil" is now "Mein Profil" · same place · tapped as in the baseline
+"Mein Profil" on s000 leads where "Profil" led · the same button, renamed
+follow s000 "Workouts" moved · 180 pt down · tapped as in the baseline
+```
+
+A renamed button is only a guess: another button can have taken the old one's place. So the log and the report also say where it led. *leads to the same screen* confirms the rename; *leads elsewhere* means another button at the same place. In that case there is no second try after a fresh start. The report lists this per screen (UI: **Compare → buttons**; HTML report: under the screen; CLI: `diff` under *buttons*):
+
+```
+renamed "Profil" → "Mein Profil" · same place · leads to the same screen
+moved "Workouts" · 180 pt down · leads to the same screen
+removed "Hilfe"
+```
+
+List cells and links pair the same way, but give no hints: in a list the content moves and changes on its own. The hints also work for runs that did not follow the baseline, as long as the screens were matched.
+
+`--no-follow` (`crawl.follow: false`, UI: uncheck *Follow the baseline*) explores freely as if there were no baseline.
 
 ## Reports
 
@@ -270,6 +329,25 @@ export SNAPPCRAWL_TOTP_SECRET="JBSWY3DPEHPK3PXP"   # only for mfa: totp
 
 With `fallbackManual: true` (default), a failed automatic login also pauses for a manual one. After login the session is kept for the rest of the run.
 
+### PIN
+
+Many apps ask for a PIN, at the start or after the login. Set it once, of any length (4, 6, 8 digits …):
+
+```bash
+export SNAPPCRAWL_PIN="0815"
+```
+
+Or `"pin": "env:SNAPPCRAWL_PIN"` in `auth` of `snappcrawl.config.json` (always as a string in quotes, so a leading zero stays), or the *pin* field in the web UI under **Setup → Login** (sent to the local server only, never written to disk). There is no command-line option, so the PIN does not end up in your shell history. The log only shows the number of digits.
+
+A screen counts as a PIN prompt when it says *PIN*, *Passcode*, *Geheimzahl*, *Zugangscode*, *Sicherheitscode* (or similar) and has a number pad or an input field, or when it has a number pad next to a secure field. A form with a user name and a password is a login, not a PIN. How it is entered:
+
+- **Number pad** (the app's own buttons 0–9, or the system number pad): the digits are tapped one by one.
+- **Input field:** the field is tapped and the PIN typed.
+- No automatic send: a button like *OK*, *Weiter* or *Bestätigen* is tapped afterwards.
+- A second prompt that looks different (*Confirm your PIN*) gets the PIN once more.
+
+**A wrong PIN is never retried** on the same prompt, because a few wrong tries can lock the account. The log says `the PIN was not accepted · not tried again` and the crawl pauses for you to enter it on the device. Without a configured PIN the crawl pauses as well. The iPhone's own passcode (lock screen) cannot be entered this way, so keep the iPhone unlocked while crawling.
+
 > **Use test accounts, never production accounts.** The crawler taps everything it is allowed to tap.
 
 ## Real-world apps: banners, onboarding and alerts
@@ -279,12 +357,12 @@ Real apps rarely open straight on their start screen. snappcrawl handles the usu
 | What appears | What snappcrawl does | Setting |
 |---|---|---|
 | Onboarding sheets, "What's new", hints | Taps a dismiss button (exact label: *Alles klar, OK, Später, Nicht jetzt, Schließen, Überspringen, Got it, Not now, Maybe later, Close, Skip, …*) at start and whenever a relaunch or replay lands on an unexpected screen; up to 3 times, logged as `dismiss "…"` | `crawl.dismiss` (list of labels) |
-| Cookie and privacy banners | **Never decided automatically.** With `--prepare` you decide yourself; otherwise the screen is skipped with a warning (a banner on the start screen ends the crawl there) | `--prepare` |
+| Cookie and privacy banners | **Never decided automatically**, except with `--intro skip` or `fresh`, where you ask for it (accepted, see below). With `--prepare` you decide yourself; otherwise the screen is skipped with a warning (a banner on the start screen ends the crawl there) | `--prepare` |
 | Permission prompts (notifications, location, tracking, photos) | Answered with *Don't Allow* / *Ask App Not to Track* by default, through WebDriverAgent's alert API on iPhones and through the accessibility tree on the simulator | `crawl.systemAlerts`: `dismiss` · `accept` · `pause` |
 | Links in web content | Not tapped (`action.skip "…" (web link)`), they usually open Safari | `crawl.webLinks`: `skip` · `tap` |
 | A tap that brings Safari or another app to the front | Logged as `left app`, the app is brought back, nothing is registered (no crash node) | |
 | A replay that lands on the wrong screen | Dismiss first, then one complete restart and replay; only then the screen is skipped with a warning | `crawl.matchThreshold` |
-| Onboarding shown only on the first launch | When the app opens twice in a row on another known screen, that screen becomes the **launch screen**; the screens before it are marked *one-time* (dashed in the graph), not a warning. Paths are stored relative to the launch screen. In a diff, one-time screens are compared only when both runs have them, otherwise they show as *one-time (skipped)* | |
+| Onboarding shown only on the first launch | See [App intro](#app-intro-screens-shown-only-on-the-first-start) for `--intro skip` and `--intro fresh`. In the default mode `keep`: when the app opens twice in a row on another known screen, that screen becomes the **launch screen**; the screens before it are marked *one-time* (dashed in the graph), not a warning. Paths are stored relative to the launch screen. In a diff, one-time screens are compared only when both runs have them, otherwise they show as *one-time (skipped)* | |
 
 **`--prepare`** (in the UI: *Prepare app manually before crawl*) launches the app and pauses: *Bring the app to the screen where the crawl should start, then continue.* Use it to make the cookie decision, finish onboarding or log in by hand. The screen you leave the app on becomes the root of the graph. If a later restart does not show that screen again, snappcrawl dismisses what is in the way; if a privacy banner comes back, it pauses again.
 
@@ -294,9 +372,67 @@ snappcrawl crawl --device "Lena's iPhone" --bundle com.acme.app --prepare
 
 Warnings collected during a run are stored in `atlas.json` (`meta.warnings`).
 
+### App intro: screens shown only on the first start
+
+Many apps show a welcome tour, permission prompts and a cookie banner only the first time they open. A first crawl of a fresh app sees them, the comparison run does not, so they turn up as *one-time* screens. `--intro` (in the UI: *Setup → app intro*) decides how a run deals with them:
+
+| `--intro` | Before the crawl | Result |
+|---|---|---|
+| `keep` | nothing | The intro is crawled when it shows and marked *one-time*. The log names how many one-time screens there were, with a hint to `fresh` and `skip`. |
+| `skip` | **A warm-up.** The app is started and the intro is tapped through. Buttons with an exact label like *Überspringen, Skip, Weiter, Continue, Los geht's, Get started, Erlauben, Allow* or one of the dismiss labels are tapped, *skip* labels first. Permission prompts are **allowed**. Cookie banners are **accepted** (*Alle akzeptieren / Accept all*). The warm-up stops at a tab bar, a login or when nothing is left to tap. Then the app is restarted, and this repeats (up to 4 times) until it opens the same way twice. | The crawl starts on the app's own start screen. The intro is not in the map, and neither run of a comparison has it. Each step is logged as `intro.skip …`. |
+| `fresh` | **A reset.** The app starts like it was just installed (see below). Hints at the start are not tapped away. | Every run has the intro, so a comparison also checks the intro. A cookie banner is kept as a screen and then left through *Alle akzeptieren / Accept all*, so the crawl goes on into the app. Permission prompts follow `--alerts`. |
+
+**How the reset works**
+- **Simulator:** the app's data folder is emptied (documents, settings, caches, cookies) and its permissions are reset (`simctl privacy reset`). The keychain and app group folders stay, so an app that keeps its login in the keychain may still be logged in.
+- **`--reinstall path/to/App.app`:** uninstalls the app and installs this build. This works on the simulator and on an iPhone, needs a build signed for the device, and also resets the keychain entries the app owns. `--reinstall` implies `--intro fresh`.
+- **iPhone without `--reinstall`:** an iPhone cannot clear an app's data, so the crawl pauses: *Delete the app on the iPhone and install it again, then continue.* Use this for App Store apps.
+- System apps of the simulator have no data folder to reset. Use `--reinstall` or `skip` for them.
+
+**Which mode a run uses.** Without `--intro`, a run uses the mode of the app's baseline (logged as `intro fresh · like the baseline of this app`), otherwise `keep`. Choose the mode once for the first run, and every comparison starts the same way. The mode is stored in `atlas.json` (`meta.intro`).
+
+```bash
+snappcrawl crawl --bundle com.acme.app --intro skip                      # leave the intro out
+snappcrawl crawl --bundle com.acme.app --intro fresh                     # simulator: reset, intro in every run
+snappcrawl crawl --device "Lena's iPhone" --bundle com.acme.app --reinstall build/Acme.app
+```
+
 ## Safety: the blocklist
 
 Elements whose label contains a blocklisted word are never tapped. Defaults: `log out`, `sign out`, `delete account`, `buy`, `purchase`, `pay now`, plus German equivalents. Extend it per app in `crawl.blocklist`. Skipped actions are logged as `action.skip`.
+
+## Crawl order
+
+The crawler explores **level by level** (breadth-first) and on every screen taps **navigation first**.
+
+1. **Start screen.** It takes a screenshot and collects every tappable element.
+2. **Every action of level 1.** It taps each element once.
+   - A new screen gets a screenshot and joins the queue, and the crawler goes back to the start screen.
+   - A known screen only gets the transition.
+   - If the tap changes nothing, the crawler moves to the next element.
+3. **Level 2, then level 3, and so on.** It takes the next screen from the queue and taps all of its elements, which queues the screens of the next level.
+4. **Stop.** It stops when the queue is empty or a limit is reached (`maxDepth`, `maxScreens`, minutes).
+
+New screens are not explored right away, only queued. Before every tap the crawler brings the app back to the screen it is working on. It taps *Back* when there is one, otherwise it restarts the app and replays the taps that led there. Taps on deeper screens therefore take longer.
+
+**Which element first.** Each element gets a tier. Within a tier the order is top to bottom, then left to right.
+
+| Tier | What | Why |
+|---|---|---|
+| 1 · prefer | labels from `--prefer` / `crawl.prefer`, in the order given | parts of the app you care about most |
+| 2 · navigation | tab bar, navigation bar, toolbar, segmented control, menu buttons (`Menu`, `Mehr`, ids with *menu*, *sidebar*, *drawer*) | shows the main areas of the app early |
+| 3 · buttons | every other button | |
+| 4 · list items | list cells and links | a list usually leads to the same kind of screen |
+
+**Which screen next.** The queue follows the same tiers within a level. Screens reached through a preferred element come first, then those reached through navigation, then buttons, then list items. A level is always finished before the next one starts.
+
+**Tabs once per run.** The tab bar is on almost every screen. The crawler taps each tab once, on the first screen where it sees it, and remembers where it leads. On every other screen the same tab only adds the known transition to the map, without a tap and without going back. The log ends with how many tab taps were saved.
+
+**Options**
+
+- `--prefer "Konto,Einstellungen"` (`crawl.prefer`): elements whose label or id contains one of these words are tapped before everything else, in the order given, and their screens are explored first on their level. Case does not matter. The blocklist still wins.
+- `--max-per-list 3` (`crawl.maxPerList`, default `0` = all): only the first *n* cells of each list are tapped. Ten articles in a feed usually lead to one kind of detail screen, so three are enough to see it. Skipped cells are logged (`action.skip 7 more list items (max 3 per list)`) and stored in the run (`limited` per screen). A list is a table or collection view, or, without one, cells in the same column with the same width. Only cells count: some lists, like the iOS Settings rows, are reported as buttons in the simulator and are not cut.
+
+Both options are also in the web UI under **Setup → Limits and interruptions**, and can be stored for every crawl: `snappcrawl config set crawl.prefer "Konto, Einstellungen"`, `snappcrawl config set crawl.maxPerList 3`.
 
 ## Configuration
 
@@ -311,6 +447,7 @@ Elements whose label contains a blocklisted word are never tapped. Defaults: `lo
     "password": "env:SNAPPCRAWL_PASSWORD",
     "mfa": "totp",
     "totpSecret": "env:SNAPPCRAWL_TOTP_SECRET",
+    "pin": "env:SNAPPCRAWL_PIN",
     "fallbackManual": true
   },
   "crawl": { "maxDepth": 8, "maxScreens": 200, "timeLimitMin": 20, "blocklist": ["log out", "delete account", "buy"], "systemAlerts": "dismiss" },
@@ -323,6 +460,8 @@ Elements whose label contains a blocklisted word are never tapped. Defaults: `lo
 | `device.platform` | `ios-sim` | `ios-sim` (simulator) or `ios-device` (iPhone over USB) |
 | `device.udid` | `booted` | simulator or iPhone, by udid or name |
 | `device.wdaUrl` | `http://127.0.0.1:8100` | WebDriverAgent address for `ios-device` |
+| `auth.pin` | | a PIN the app asks for, as a string (see [PIN](#pin)) |
+| `crawl.against` | | compare with the baseline of another app, a second build (`--against`, see [two builds side by side](#two-builds-side-by-side)) |
 | `crawl.maxDepth` | `8` | taps away from the first screen |
 | `crawl.maxScreens` | `200` | stop after this many screens |
 | `crawl.timeLimitMin` | `20` | stop after this many minutes |
@@ -332,6 +471,11 @@ Elements whose label contains a blocklisted word are never tapped. Defaults: `lo
 | `crawl.dismiss` | DE + EN list | button labels that close onboarding sheets and hints |
 | `crawl.systemAlerts` | `dismiss` | permission prompts: `dismiss`, `accept` or `pause` |
 | `crawl.webLinks` | `skip` | links in web content: `skip` or `tap` |
+| `crawl.follow` | `true` | with a baseline: repeat it first, a tap that lands elsewhere is tried once more (`--no-follow`, see [following the baseline](#comparable-runs-following-the-baseline)) |
+| `crawl.intro` | like the baseline, else `keep` | screens shown only on the first start: `keep`, `skip`, `fresh` (`--intro`, see [App intro](#app-intro-screens-shown-only-on-the-first-start)) |
+| `crawl.reinstall` | | with `fresh`: a `.app` to uninstall and install before each run (`--reinstall`) |
+| `crawl.prefer` | `[]` | labels tapped before everything else, in this order (`--prefer`, see [Crawl order](#crawl-order)) |
+| `crawl.maxPerList` | `0` | only the first n cells of each list, `0` = all (`--max-per-list`) |
 | `diff.threshold` | `0.1` | per-pixel colour tolerance (0–1) |
 | `diff.minChangedRatio` | `0.0005` | share of changed pixels below which a screen counts as unchanged |
 | `diff.ignoreStatusBar` | `true` | masks the clock and battery area |
@@ -367,10 +511,10 @@ Then `snappcrawl diff --ai`, or **Notes** in the web UI. Global settings live in
 | `snappcrawl boot <simulator>` | boot a simulator |
 | `snappcrawl apps` | apps on the simulator · `--device` for an iPhone |
 | `snappcrawl wda setup \| start \| stop \| status` | WebDriverAgent for iPhones · `--team --bundle-id --udid` |
-| `snappcrawl crawl` | explore the app · `--bundle --udid --device --label --max-depth --max-screens --minutes --mfa --prepare --alerts --dismiss --block --diff` |
+| `snappcrawl crawl` | explore the app · `--bundle --then --against --udid --device --label --max-depth --max-screens --minutes --mfa --prepare --alerts --dismiss --block --prefer --max-per-list --intro --reinstall --no-follow --diff` |
 | `snappcrawl runs` · `runs rm <run>` | list runs, delete one with its comparisons |
 | `snappcrawl baseline [run]` | show baselines, or make a run the baseline of its app |
-| `snappcrawl diff [base] [head]` | compare runs (default: baseline vs the newest run after it) · `--ai` |
+| `snappcrawl diff [base] [head]` | compare runs (default: baseline vs the newest run after it, or the pair of `crawl --then`) · `--ai` |
 | `snappcrawl review …` | list changes, or `review <id\|all> <approve\|reject\|undo>` |
 | `snappcrawl report [base] [head]` | HTML report to `.snappcrawl/reports/` · `--full --out <file>` |
 | `snappcrawl notes [base] [head]` | model notes for the changes |
@@ -381,10 +525,11 @@ Then `snappcrawl diff --ai`, or **Notes** in the web UI. Global settings live in
 
 ## How it works
 
-1. **Explore.** After launch (and login), the crawler reads the accessibility tree with `idb ui describe-all`, collects tappable elements (buttons, cells, tabs, links), and explores breadth-first. To get back to a screen it taps *Back* or relaunches the app and replays the taps that led there.
-2. **Identify screens.** A screen's identity is a fingerprint of its accessibility structure, with numbers masked, so a clock or a counter does not create a "new" screen. Web content inside the app (ad banners, embedded pages) is left out, so a rotating banner does not either. When the fingerprint differs, a **signature** decides: the stable parts of a screen (navigation bar title, selected tab, buttons, toolbar, layout) count, feed texts in cells, numbers, dates and ads count little or not at all. Two views are the same screen from a similarity of `crawl.matchThreshold` (0.8); a different navigation bar title always means a different screen. The same rule is used for replays (every step is checked and logged as `replay s002 ok · match 0.91`) and for matching screens between two runs. Screens are named after the navigation bar title, else the selected tab, else the first large text near the top, else the action that led there; repeated names get " (2)", " (3)".
-3. **Detect crashes.** After every tap snappcrawl checks whether the app process is still alive and records a crash node in the graph.
-4. **Compare.** Screens of two runs are matched by the path of taps that reached them, then by fingerprint. Matched screenshots are compared with [pixelmatch](https://github.com/mapbox/pixelmatch); changed pixels are grouped into regions. Screens only in the new run are *new*; screens only in the baseline are *unreachable*.
+1. **Explore.** After launch (and login), the crawler reads the accessibility tree with `idb ui describe-all`, collects tappable elements (buttons, cells, tabs, links), and explores breadth-first with navigation first (see [Crawl order](#crawl-order)). To get back to a screen it taps *Back* or relaunches the app and replays the taps that led there.
+2. **Wait until the screen is still.** After every tap and launch the screen is read again until two reads in a row show the same layout (type, position and size of every element; texts do not count, so a clock or a feed does not keep it waiting) and it is not empty. Without this, a read during a push animation lists the old and the new screen at once, and a read while loading lists nothing: such a screen gets wrong actions, the way back to it fails, and the pages behind it are never found.
+3. **Identify screens.** A screen's identity is a fingerprint of its accessibility structure, with numbers masked, so a clock or a counter does not create a "new" screen. Web content inside the app (ad banners, embedded pages) is left out, so a rotating banner does not either. When the fingerprint differs, a **signature** decides: the stable parts of a screen (navigation bar title, selected tab, buttons, toolbar, layout) count, feed texts in cells, numbers, dates and ads count little or not at all. Two views are the same screen from a similarity of `crawl.matchThreshold` (0.8); a different navigation bar title always means a different screen. The same rule is used for replays (every step is checked and logged as `replay s002 ok · match 0.91`) and for matching screens between two runs. Screens are named after the navigation bar title, else the selected tab, else the first large text near the top, else the action that led there; repeated names get " (2)", " (3)".
+4. **Detect crashes.** After every tap snappcrawl checks whether the app process is still alive and records a crash node in the graph.
+5. **Compare.** A run that [followed the baseline](#comparable-runs-following-the-baseline) knows for every screen which baseline screen it is. Otherwise screens of two runs are matched by the path of taps that reached them, then by fingerprint. Matched screenshots are compared with [pixelmatch](https://github.com/mapbox/pixelmatch); changed pixels are grouped into regions. Screens only in the new run are *new*; screens only in the baseline are *unreachable*. On matched screens, buttons are paired by label and place, which gives the [renamed, moved and removed](#label-and-place-renamed-and-moved-buttons) hints.
 
 ## Output
 
@@ -407,8 +552,9 @@ Add `.snappcrawl/` to `.gitignore` (`snappcrawl init` does this).
 
 - iOS Simulator and iPhones over USB. **Next:** Android (adb + UiAutomator).
 - Apps with poor accessibility labels expose fewer tappable elements; a screenshot-based fallback is planned.
-- Lists with endless dynamic content can produce many similar screens; use `maxScreens` and `maxDepth`.
-- Planned: replay mode (re-run exactly the baseline paths), ignore regions per screen.
+- Lists with endless dynamic content can produce many similar screens; use `--max-per-list`, `maxScreens` and `maxDepth`.
+- An app that really behaves differently on the same tap (Maps opens a profile sheet over a collapsed or an expanded panel) still shows a *new* screen after the retry. Mark it in the review.
+- Planned: ignore regions per screen.
 
 ## Development
 

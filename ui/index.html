@@ -155,20 +155,29 @@ table.kv{width:100%;border-collapse:collapse;font:12px var(--mono);margin:16px 0
     <section class="blk"><h2><span>02</span>App</h2>
       <label class="fl"><span>installed apps</span><select class="in" id="appsel"><option value="">loading…</option></select></label>
       <label class="fl"><span>bundle id</span><input class="in mono" id="bundle" placeholder="com.example.app" autocomplete="off" spellcheck="false"></label>
+      <label class="fl"><span>then crawl · a second build installed side by side (optional): the app above becomes the baseline, this one is crawled against it and compared</span><input class="in mono" id="then" list="applist" placeholder="com.example.app.beta" autocomplete="off" spellcheck="false"></label>
+      <label class="fl" id="againstf"><span>or compare with the baseline of another app (optional)</span><input class="in mono" id="against" list="applist" placeholder="com.example.app" autocomplete="off" spellcheck="false"></label>
+      <datalist id="applist"></datalist>
       <label class="fl"><span>run label (optional)</span><input class="in mono" id="label" placeholder="v2.4.0" autocomplete="off"></label>
     </section>
     <section class="blk"><h2><span>03</span>Login</h2>
       <label class="fl"><span>username</span><input class="in" id="user" autocomplete="off" spellcheck="false"></label>
       <label class="fl"><span>password · sent to the local server only, never written to disk</span><input class="in" id="pass" type="password" autocomplete="off"></label>
+      <label class="fl"><span>pin · when the app asks for one (4, 6, 8 digits …), tapped on its number pad or typed · sent to the local server only</span><input class="in mono" id="pin" type="password" inputmode="numeric" autocomplete="off"></label>
       <div class="fl"><span>second factor</span><div class="seg" id="mfa"></div></div>
       <label class="fl" id="totpf"><span>totp secret (base32)</span><input class="in mono" id="totp" autocomplete="off" spellcheck="false"></label>
       <label class="chk"><input type="checkbox" id="fallback" checked>If automatic login fails, pause and let me log in on the device</label>
     </section>
     <section class="blk"><h2><span>04</span>Limits and interruptions</h2>
       <div class="grid3"><label class="fl"><span>max depth</span><input class="in mono" id="depth" type="number" min="1"></label><label class="fl"><span>max screens</span><input class="in mono" id="maxs" type="number" min="1"></label><label class="fl"><span>minutes</span><input class="in mono" id="mins" type="number" min="1"></label></div>
+      <label class="fl"><span>prefer · tapped before everything else, in this order (navigation comes next, list items last)</span><input class="in" id="prefer" spellcheck="false" placeholder="e.g. Konto, Einstellungen"></label>
+      <div class="grid3"><label class="fl"><span>max per list · 0 = all</span><input class="in mono" id="perlist" type="number" min="0"></label></div>
       <label class="fl"><span>blocklist · elements containing these words are never tapped</span><textarea class="in" id="block" spellcheck="false"></textarea></label>
       <div class="grid3"><label class="fl" style="grid-column:span 2"><span>system alerts (notifications, location, tracking)</span><select class="in" id="alerts"><option value="dismiss">deny automatically</option><option value="accept">allow automatically</option><option value="pause">pause and let me answer</option></select></label></div>
       <label class="fl"><span>dismiss · buttons that close onboarding sheets and hints (exact labels)</span><textarea class="in" id="dismiss" spellcheck="false"></textarea></label>
+      <div class="grid3"><label class="fl" style="grid-column:span 3"><span>app intro · screens an app shows only on its first start</span><select class="in" id="intro"><option value="">like the baseline (else keep)</option><option value="keep">keep · as it comes, marked one-time</option><option value="skip">skip · tap through it once, allow prompts, accept cookies, restart, then crawl</option><option value="fresh">fresh · reset the app first, every run has the intro</option></select></label></div>
+      <label class="fl" id="reinstallf"><span>reinstall · with fresh: a .app to install before each run (needed on an iPhone, else you are asked to)</span><input class="in mono" id="reinstall" spellcheck="false" placeholder="/path/to/App.app"></label>
+      <label class="chk"><input type="checkbox" id="follow" checked>Follow the baseline: its screens first, in its order; a tap that lands elsewhere is tried once more</label>
       <label class="chk"><input type="checkbox" id="prepare">Prepare app manually before crawl (cookie banner, onboarding, start screen)</label>
     </section>
   </div>
@@ -403,6 +412,7 @@ async function loadApps() {
   sel.innerHTML = '<option value="">loading…</option>';
   try {
     const { apps } = await api('/api/apps?udid=' + encodeURIComponent(S.udid) + (dev ? '&type=device' : ''));
+    $('#applist').innerHTML = apps.map((a) => `<option value="${esc(a.bundleId)}">${esc(a.name)}</option>`).join('');
     sel.innerHTML = '<option value="">choose an app</option>' + apps.map((a) => `<option value="${esc(a.bundleId)}"${a.bundleId === $('#bundle').value ? ' selected' : ''}>${esc(a.name)} · ${esc(a.bundleId)}${a.type === 'system' ? ' (system)' : ''}</option>`).join('');
   } catch (e) { sel.innerHTML = `<option value="">${esc(e.message.slice(0, 80))}</option>`; }
 }
@@ -418,18 +428,32 @@ function renderCli() {
   else if (sim) parts.push(`--udid "${esc(sim.name)}"`);
   if (S.mfa !== 'none') parts.push(`--mfa ${S.mfa}`);
   if ($('#depth').value) parts.push(`--max-depth ${esc($('#depth').value)}`);
+  const then = $('#then').value.trim(), against = then ? '' : $('#against').value.trim();
+  $('#againstf').style.display = then ? 'none' : '';
+  if (then) parts.push(`--then <b>${esc(then)}</b>`);
+  if (against) parts.push(`--against ${esc(against)}`);
   if ($('#label').value) parts.push(`--label ${esc($('#label').value)}`);
+  if ($('#prefer').value.trim()) parts.push(`--prefer "${esc($('#prefer').value.split(',').map((s) => s.trim()).filter(Boolean).join(','))}"`);
+  if (+$('#perlist').value > 0) parts.push(`--max-per-list ${+$('#perlist').value}`);
+  if (!$('#follow').checked) parts.push('--no-follow');
+  if ($('#intro').value) parts.push(`--intro ${$('#intro').value}`);
+  if ($('#intro').value === 'fresh' && $('#reinstall').value.trim()) parts.push(`--reinstall "${esc($('#reinstall').value.trim())}"`);
+  $('#reinstallf').style.display = $('#intro').value === 'fresh' ? '' : 'none';
   if ($('#prepare').checked) parts.push('--prepare');
   $('#cli').innerHTML = '$ ' + parts.join(' ');
   const bid = $('#bundle').value.trim();
-  const b = bid && S.state?.baselines?.[bid] && S.state.runs.find((r) => r.id === S.state.baselines[bid]);
-  $('#basehint').textContent = !bid ? '' : b ? `will be compared with the baseline ${runName(b)}` : 'no baseline for this app yet · this run becomes the baseline';
+  const ref = against || bid;
+  const b = ref && S.state?.baselines?.[ref] && S.state.runs.find((r) => r.id === S.state.baselines[ref]);
+  $('#basehint').textContent = !bid ? '' : then ? `${bid} is crawled first and becomes its baseline, then ${then} is crawled against it and compared`
+    : against ? (b ? `will be compared with the baseline of ${against} · ${runName(b)}` : `${against} has no baseline yet · crawl it first, or use then crawl`)
+    : b ? `will be compared with the baseline ${runName(b)}` : 'no baseline for this app yet · this run becomes the baseline';
 }
 function fillSetup() {
   const c = S.state.config;
   $('#bundle').value ||= c.bundleId || '';
   $('#user').value ||= c.username || '';
   $('#pass').placeholder = c.hasPassword ? 'from config / SNAPPCRAWL_PASSWORD' : '';
+  $('#pin').placeholder = c.hasPin ? 'from config / SNAPPCRAWL_PIN' : '';
   $('#totp').placeholder = c.hasTotp ? 'from config / SNAPPCRAWL_TOTP_SECRET' : 'JBSWY3DPEHPK3PXP';
   S.mfa = c.mfa || 'none';
   $('#fallback').checked = c.fallbackManual !== false;
@@ -438,6 +462,11 @@ function fillSetup() {
   $('#prepare').checked = !!c.crawl.prepare;
   $('#alerts').value = c.crawl.systemAlerts || 'dismiss';
   $('#dismiss').value = (c.crawl.dismiss || []).join(', ');
+  $('#prefer').value = (c.crawl.prefer || []).join(', ');
+  $('#intro').value = c.crawl.intro || '';
+  $('#follow').checked = c.crawl.follow !== false;
+  $('#reinstall').value ||= c.crawl.reinstall || '';
+  $('#perlist').value = c.crawl.maxPerList || 0;
   renderMfa();
 }
 $('#v-setup').addEventListener('click', (e) => {
@@ -452,9 +481,9 @@ $('#v-setup').addEventListener('input', renderCli);
 $('#appsel').addEventListener('change', (e) => { if (e.target.value) { $('#bundle').value = e.target.value; renderCli(); } });
 $('#start').onclick = async () => {
   const body = {
-    udid: S.udid, platform: S.dtype === 'device' ? 'ios-device' : 'ios-sim', bundleId: $('#bundle').value.trim(), label: $('#label').value.trim(),
-    auth: { username: $('#user').value, password: $('#pass').value, mfa: S.mfa, totpSecret: $('#totp').value.trim(), fallbackManual: $('#fallback').checked },
-    crawl: { maxDepth: +$('#depth').value || undefined, maxScreens: +$('#maxs').value || undefined, timeLimitMin: +$('#mins').value || undefined, blocklist: $('#block').value.split(',').map((s) => s.trim()).filter(Boolean), prepare: $('#prepare').checked, systemAlerts: $('#alerts').value, dismiss: $('#dismiss').value.split(',').map((s) => s.trim()).filter(Boolean) },
+    udid: S.udid, platform: S.dtype === 'device' ? 'ios-device' : 'ios-sim', bundleId: $('#bundle').value.trim(), then: $('#then').value.trim(), label: $('#label').value.trim(),
+    auth: { username: $('#user').value, password: $('#pass').value, mfa: S.mfa, totpSecret: $('#totp').value.trim(), pin: $('#pin').value.trim(), fallbackManual: $('#fallback').checked },
+    crawl: { maxDepth: +$('#depth').value || undefined, maxScreens: +$('#maxs').value || undefined, timeLimitMin: +$('#mins').value || undefined, blocklist: $('#block').value.split(',').map((s) => s.trim()).filter(Boolean), prepare: $('#prepare').checked, systemAlerts: $('#alerts').value, dismiss: $('#dismiss').value.split(',').map((s) => s.trim()).filter(Boolean), prefer: $('#prefer').value.split(',').map((s) => s.trim()).filter(Boolean), maxPerList: Math.max(0, +$('#perlist').value || 0), follow: $('#follow').checked, intro: $('#intro').value, reinstall: $('#intro').value === 'fresh' ? $('#reinstall').value.trim() : '', against: $('#then').value.trim() ? '' : $('#against').value.trim() },
   };
   try { await api('/api/crawl', body); S.live = { id: null, atlas: null, log: [], logRun: null, ask: null, running: true }; runGraph.fitted = false; show('run'); }
   catch (e) { toast(e.message); }
@@ -636,8 +665,18 @@ function renderInspector() {
   $('#cmpside').innerHTML = `${done}<div class="it"><h3>${esc(s.name)}</h3><span class="tag t-${dec || s.status}">${esc(label)}</span></div>
     <p class="path">${['start', ...s.path].map(esc).join(' → ')}</p>${images}
     <table class="kv"><tr><td>screen</td><td>${esc(s.id)}</td></tr><tr><td>status</td><td>${esc(s.reason || STATUS[s.status])}</td></tr><tr><td>pixel Δ</td><td>${pct(s.ratio)}</td></tr><tr><td>regions</td><td>${s.boxes.length}</td></tr><tr><td>elements</td><td>${s.elements ?? '–'}</td></tr>${s.size ? `<tr><td>size</td><td>${s.size[0]}×${s.size[1]}</td></tr>` : ''}</table>
+    ${hintLines(s).length ? `<div class="sec"><h4>buttons</h4>${hintLines(s).map((l) => `<p class="hint" style="margin:0 0 4px;color:var(--fg)">${esc(l)}</p>`).join('')}</div>` : ''}
     ${note ? `<div class="note"><b>note · ${esc(note.model)} · ${esc(note.verdict)}</b>${esc(note.summary)}</div>` : ''}
     <div class="acts">${acts}</div>${list}`;
+}
+// buttons renamed, moved or removed (the same lines as in the exported report)
+function hintLines(s) {
+  const h = s.hints; if (!h) return [];
+  const leads = (x) => (x === true ? ' · leads to the same screen' : x === false ? ' · leads elsewhere' : '');
+  const move = ({ dx, dy }) => [Math.abs(dy) >= 1 ? `${Math.abs(dy)} pt ${dy > 0 ? 'down' : 'up'}` : '', Math.abs(dx) >= 1 ? `${Math.abs(dx)} pt ${dx > 0 ? 'right' : 'left'}` : ''].filter(Boolean).join(', ') || 'in place';
+  const q = (l) => `"${String(l).length > 40 ? String(l).slice(0, 39) + '…' : l}"`;
+  const gone = h.removed.slice(0, 5).map(q).join(', ') + (h.removed.length > 5 ? ` and ${h.removed.length - 5} more` : '');
+  return [...h.renamed.map((r) => `renamed ${q(r.from)} → ${q(r.to)} · same place${leads(r.same)}`), ...h.moved.map((m) => `moved ${q(m.label)} · ${move(m)}${leads(m.same)}`), ...(h.removed.length ? [`removed ${gone}`] : [])];
 }
 $('#v-compare').addEventListener('click', async (e) => {
   const b = e.target.closest('button'); if (!b) return;

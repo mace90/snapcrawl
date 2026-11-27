@@ -12,10 +12,11 @@ import * as control from '../src/control.js';
 import { crawl, formatEta } from '../src/crawler.js';
 import { createDemo } from '../src/demo.js';
 import { buildReport } from '../src/diff.js';
+import { crawlPair } from '../src/pair.js';
 import { listAllDevices, makeDriver } from '../src/drivers/index.js';
 import { DEFAULT_WDA_URL } from '../src/drivers/ios-device.js';
 import * as legacy from '../src/legacy.js';
-import { applyReview, decisionOf, needsReview, renderReport, reportFileName, reviewState } from '../src/report.js';
+import { applyReview, decisionOf, hintLines, needsReview, renderReport, reportFileName, reviewState } from '../src/report.js';
 import { startServer } from '../src/server.js';
 import { setup } from '../src/setup.js';
 import { Store } from '../src/store.js';
@@ -65,15 +66,26 @@ ${t.bold('More')}
 
 ${t.bold('Crawl options')}
   --bundle <id>               app bundle id (or app.bundleId in ${LOCAL_FILE})
+  --then <id>                 two builds installed side by side: crawl --bundle as the baseline,
+                              then this app against it, then compare (e.g. --bundle com.firma.app --then com.firma.app.beta)
+  --against <id>              compare this run with the baseline of another app (the second build)
   --udid <udid|name>          simulator (default: the booted one)
   --device <udid|name>        real iPhone over USB
   --label <text>              tag the run, e.g. v2.4.0
   --max-depth <n>  --max-screens <n>  --minutes <n>
   --mfa <none|totp|prompt|manual>
+  --no-follow                 explore freely; by default a run with a baseline repeats it first
+                              (its screens in its order, a tap that lands elsewhere tried once more)
+  --intro <keep|skip|fresh>   screens an app shows only on its first start (default: like the baseline, else keep)
+                              skip: tap through the intro once, allow prompts, accept cookies, restart, then crawl
+                              fresh: reset the app before the crawl, so every run (and every comparison) has the intro
+  --reinstall <App.app>       with --intro fresh: uninstall and install this build (needed on an iPhone to skip the manual step)
   --prepare                   pause after launch: decide cookie banners, finish onboarding, open the start screen
   --alerts <dismiss|accept|pause>   permission prompts (default: dismiss)
   --dismiss <a,b,c>           labels of buttons that close onboarding sheets and hints
   --block <a,b,c>             extra words that are never tapped
+  --prefer <a,b,c>            labels to tap before everything else, in this order
+  --max-per-list <n>          only the first n cells of each list (default: all)
   --diff                      compare against the baseline when done
 
 ${t.bold('Real iPhone')}
@@ -100,6 +112,13 @@ const { values: opt, positionals: pos } = parseArgs({
     alerts: { type: 'string' },
     dismiss: { type: 'string' },
     block: { type: 'string' },
+    prefer: { type: 'string' },
+    intro: { type: 'string' },
+    'no-follow': { type: 'boolean' },
+    reinstall: { type: 'string' },
+    'max-per-list': { type: 'string' },
+    then: { type: 'string' },
+    against: { type: 'string' },
     team: { type: 'string' },
     'bundle-id': { type: 'string' },
     config: { type: 'string' },
@@ -148,6 +167,11 @@ function printReport(r) {
   if (rows.length) {
     say();
     t.table(rows, { head: ['id', 'screen', 'status', 'Δ px', 'note'] });
+  }
+  const hints = r.screens.filter((x) => x.hints);
+  if (hints.length) {
+    say(`\n  ${t.bold('buttons')}`);
+    for (const x of hints) for (const l of hintLines(x)) say(`  ${t.gray(x.id)}  ${x.name} · ${l}`);
   }
   say(`\n  ${t.gray('review:')} snappcrawl  ${t.gray('(web UI) · or')} snappcrawl review\n`);
 }
@@ -248,9 +272,25 @@ const commands = {
     if (opt.alerts) cfg.crawl.systemAlerts = opt.alerts;
     if (opt.dismiss) cfg.crawl.dismiss = list(opt.dismiss);
     if (opt.block) cfg.crawl.blocklist = [...cfg.crawl.blocklist, ...list(opt.block)];
+    if (opt['no-follow']) cfg.crawl.follow = false;
+    if (opt.intro) {
+      if (!['keep', 'skip', 'fresh'].includes(opt.intro)) throw expected(`--intro must be keep, skip or fresh, not "${opt.intro}"`);
+      cfg.crawl.intro = opt.intro;
+    }
+    if (opt.reinstall) {
+      cfg.crawl.reinstall = path.resolve(opt.reinstall);
+      cfg.crawl.intro ||= 'fresh';
+    }
+    if (opt.prefer) cfg.crawl.prefer = list(opt.prefer);
+    if (opt['max-per-list']) cfg.crawl.maxPerList = Number(opt['max-per-list']);
+    if (opt.against) cfg.crawl.against = opt.against;
+    if (opt.then && opt.against) throw expected('--then crawls the baseline app itself · leave out --against');
+    if (opt.then === cfg.app.bundleId) throw expected('--then needs another bundle id than --bundle · to compare one app with itself, crawl it twice');
+    if (opt.then && cfg.crawl.reinstall) throw expected('--reinstall installs one build · with --then use --intro fresh, each app is reset before its run');
+    if (cfg.crawl.against && !opt.then && !store.baselineFor(cfg.crawl.against)) throw expected(`no baseline for ${cfg.crawl.against} · crawl it first, or both at once: snappcrawl crawl --bundle ${cfg.crawl.against} --then ${cfg.app.bundleId}`);
     const o = driverOpts();
     const driver = makeDriver({ ...o, bundleId: cfg.app.bundleId });
-    t.title('crawl', `${cfg.app.bundleId} · ${driver.platform === 'ios-device' ? 'iPhone' : 'simulator'} · depth ≤ ${cfg.crawl.maxDepth} · ≤ ${cfg.crawl.maxScreens} screens`);
+    t.title('crawl', `${opt.then ? `${cfg.app.bundleId} then ${opt.then}` : cfg.app.bundleId} · ${driver.platform === 'ios-device' ? 'iPhone' : 'simulator'} · depth ≤ ${cfg.crawl.maxDepth} · ≤ ${cfg.crawl.maxScreens} screens`);
     if (driver.platform === 'ios-device') await control.ensureWda({ udid: o.udid, url: wdaUrl(), log: t.logLine });
 
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -273,6 +313,7 @@ const commands = {
     const io = {
       log: t.logLine,
       event: (type, data) => {
+        if (type === 'run') Object.assign(count, { screens: 0, edges: 0, progress: null });
         if (type === 'screen') count.screens++;
         if (type === 'edge') count.edges++;
         if (type === 'progress') count.progress = data;
@@ -285,8 +326,12 @@ const commands = {
       aborted: () => stop,
     };
     let atlas;
+    let pair = null;
     try {
-      atlas = await crawl({ driver, cfg, store, io, label: opt.label || '' });
+      if (opt.then) {
+        pair = await crawlPair({ driverFor: (bundleId) => (bundleId === cfg.app.bundleId ? driver : makeDriver({ ...o, bundleId })), cfg, store, io, base: cfg.app.bundleId, head: opt.then, label: opt.label || '' });
+        atlas = pair.head || pair.base;
+      } else atlas = await crawl({ driver, cfg, store, io, label: opt.label || '' });
     } finally {
       clearInterval(timer);
       t.setStatus('');
@@ -296,8 +341,15 @@ const commands = {
       process.exitCode = 1;
       return void process.stderr.write(t.errorBlock(Object.assign(new Error(atlas.meta.error || 'the crawl did not finish'), { expected: true })));
     }
-    const baseline = store.baselineFor(atlas.meta.app);
-    if (!baseline && atlas.meta.status === 'done') {
+    if (pair) {
+      if (!pair.report) return void say(`\n  ${t.gray('stopped before the test app · baseline:')} ${pair.base.meta.id}\n`);
+      printReport(pair.report);
+      return void say(`\n  ${t.gray('next:')} snappcrawl review · snappcrawl report --full\n`);
+    }
+    const baseline = store.baselineFor(cfg.crawl.against || atlas.meta.app);
+    if (cfg.crawl.against) {
+      if (opt.diff) printReport(buildReport({ store, baseId: baseline, headId: atlas.meta.id, cfg }));
+    } else if (!baseline && atlas.meta.status === 'done') {
       store.setBaseline(atlas.meta.id);
       say(`\n  ${t.gray('first run of this app → saved as baseline:')} ${atlas.meta.id}`);
     } else if (opt.diff && baseline && baseline !== atlas.meta.id) {

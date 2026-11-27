@@ -6,6 +6,7 @@ import { annotate, aiReady } from './ai.js';
 import { loadConfig } from './config.js';
 import * as control from './control.js';
 import { crawl } from './crawler.js';
+import { crawlPair } from './pair.js';
 import { buildReport } from './diff.js';
 import { runChecks } from './doctor.js';
 import { makeDriver } from './drivers/index.js';
@@ -117,8 +118,9 @@ export function createRoutes({ store, cfg, version, driverFactory = makeDriver, 
         hasPassword: !!cfg.auth.password,
         mfa: cfg.auth.mfa,
         hasTotp: !!cfg.auth.totpSecret,
+        hasPin: !!cfg.auth.pin,
         fallbackManual: cfg.auth.fallbackManual,
-        crawl: { maxDepth: cfg.crawl.maxDepth, maxScreens: cfg.crawl.maxScreens, timeLimitMin: cfg.crawl.timeLimitMin, blocklist: cfg.crawl.blocklist, prepare: !!cfg.crawl.prepare, systemAlerts: cfg.crawl.systemAlerts, dismiss: cfg.crawl.dismiss },
+        crawl: { maxDepth: cfg.crawl.maxDepth, maxScreens: cfg.crawl.maxScreens, timeLimitMin: cfg.crawl.timeLimitMin, blocklist: cfg.crawl.blocklist, prepare: !!cfg.crawl.prepare, systemAlerts: cfg.crawl.systemAlerts, dismiss: cfg.crawl.dismiss, prefer: cfg.crawl.prefer || [], maxPerList: cfg.crawl.maxPerList || 0, follow: cfg.crawl.follow !== false, intro: cfg.crawl.intro || '', reinstall: cfg.crawl.reinstall || '' },
         ai: { provider: cfg.ai.provider, model: cfg.ai.model, ready: aiReady(cfg.ai) },
         file: cfg._file,
       },
@@ -179,15 +181,19 @@ export function createRoutes({ store, cfg, version, driverFactory = makeDriver, 
       if (!run.app.bundleId) throw Object.assign(new Error('Pick an app (bundle id) first'), { status: 400 });
       Object.assign(run.auth, Object.fromEntries(Object.entries(body.auth || {}).filter(([, v]) => v !== '' && v !== undefined)));
       Object.assign(run.crawl, Object.fromEntries(Object.entries(body.crawl || {}).filter(([, v]) => v !== '' && v !== undefined)));
+      const then = String(body.then || '').trim();
+      if (then && then === run.app.bundleId) throw bad('the test app needs another bundle id than the baseline app · to compare one app with itself, crawl it twice');
+      if (then && run.crawl.reinstall) throw bad('reinstall installs one build · with two apps use intro fresh, each app is reset before its run');
+      if (!then && run.crawl.against && !store.baselineFor(run.crawl.against)) throw bad(`no baseline for ${run.crawl.against} · crawl it first`);
       const platform = body.platform || run.device.platform;
       const udid = body.udid || (platform === run.device.platform ? run.device.udid : '');
-      const driver = driverFactory({ platform, udid, bundleId: run.app.bundleId, wdaUrl: run.device.wdaUrl });
+      const driverFor = (bundleId) => driverFactory({ platform, udid, bundleId, wdaUrl: run.device.wdaUrl });
       Object.assign(live, { running: true, runId: null, ask: null, log: [], abort: false });
       // on an iPhone, WebDriverAgent is started first when it is not running
       (platform === 'ios-device' && !body.noWdaStart ? control.ensureWda({ udid, url: run.device.wdaUrl || DEFAULT_WDA_URL, log: io.log }) : Promise.resolve())
-        .then(() => crawl({ driver, cfg: run, store, io, label: body.label || '' }))
+        .then(() => (then ? crawlPair({ driverFor, cfg: run, store, io, base: run.app.bundleId, head: then, label: body.label || '' }).then((p) => p.head || p.base) : crawl({ driver: driverFor(run.app.bundleId), cfg: run, store, io, label: body.label || '' })))
         .then((atlas) => {
-          if (atlas.meta.status === 'done' && !store.baselineFor(atlas.meta.app)) {
+          if (!then && !run.crawl.against && atlas.meta.status === 'done' && !store.baselineFor(atlas.meta.app)) {
             store.setBaseline(atlas.meta.id);
             io.log('INFO', `first run of ${atlas.meta.appName || atlas.meta.app} · saved as baseline`);
           }

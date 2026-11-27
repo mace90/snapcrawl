@@ -383,6 +383,16 @@ export class IosDevice {
     }
   }
 
+  // Uninstall and install a build (.app signed for this iPhone): starts like the first time.
+  // There is no way to only clear an app's data on an iPhone.
+  async reinstall(appPath) {
+    if (!fs.existsSync(appPath)) throw new Error(`${appPath} not found · the .app from Xcode (Product → Show Build Folder) or your CI`);
+    if (!this.coreId) await this.findDevice();
+    await this.wda.terminate(this.bundleId).catch(() => {});
+    await this.run(['device', 'uninstall', 'app', '--device', this.coreId, this.bundleId], { timeout: 120_000 }).catch(() => {});
+    await this.run(['device', 'install', 'app', '--device', this.coreId, appPath], { timeout: 300_000 });
+  }
+
   async isRunning() {
     return Number(await this.wda.appState(this.bundleId)) >= 2;
   }

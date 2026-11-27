@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import { promisify } from 'node:util';
 
 const exec = promisify(execFile);
@@ -51,6 +53,12 @@ function normalize(e) {
     if (n?.length === 4) f = { x: n[0], y: n[1], width: n[2], height: n[3] };
   }
   if (!f) return null;
+  // idb lists bars as plain groups; their localized role or id says which bar it is
+  const hint = `${e.role_description || ''} ${e.AXLabel || ''} ${e.AXUniqueId || ''}`;
+  const bar = /button|cell|link/i.test(e.type || e.role || '') ? null
+    : /tab[- ]?(bar|leiste)/i.test(hint) ? 'tab'
+    : /nav(igation)?[- ]?(bar|leiste)/i.test(hint) ? 'nav'
+    : /tool ?bar|symbolleiste|werkzeugleiste/i.test(hint) ? 'tool' : null;
   return {
     type: String(e.type || e.role || '').replace(/^AX/, ''),
     label: String(e.AXLabel ?? e.title ?? '').trim(),
@@ -61,6 +69,8 @@ function normalize(e) {
     y: f.y,
     w: f.width,
     h: f.height,
+    ...(bar ? { bar } : {}),
+    ...(/^(back button|zurück-taste|zurück)$/i.test(e.role_description || '') ? { back: true } : {}),
   };
 }
 
@@ -96,6 +106,35 @@ export class IosSimulator {
   async launch() {
     await sh('xcrun', ['simctl', 'terminate', this.udid, this.bundleId]).catch(() => {});
     await sh('xcrun', ['simctl', 'launch', this.udid, this.bundleId]);
+  }
+
+  // Like a first start: empty the app's data container (documents, settings, caches, cookies)
+  // and reset its permissions. The keychain and app group containers stay.
+  async resetData() {
+    await sh('xcrun', ['simctl', 'terminate', this.udid, this.bundleId]).catch(() => {});
+    let dir;
+    try {
+      dir = (await sh('xcrun', ['simctl', 'get_app_container', this.udid, this.bundleId, 'data'])).trim();
+      if (!dir || dir === '(null)') throw new Error('none');
+    } catch {
+      throw new Error(`no data folder for ${this.bundleId} on this simulator (system apps have none) · reinstall it instead: --reinstall <App.app>`);
+    }
+    if (!dir.includes(`/Devices/${this.udid}/data/Containers/Data/Application/`)) throw new Error(`unexpected data folder for ${this.bundleId}: ${dir} · not touched`);
+    for (const sub of fs.readdirSync(dir)) {
+      if (sub.startsWith('.')) continue; // .com.apple.mobile_container_manager.metadata.plist
+      const p = path.join(dir, sub);
+      if (fs.statSync(p).isDirectory()) for (const f of fs.readdirSync(p)) fs.rmSync(path.join(p, f), { recursive: true, force: true });
+      else fs.rmSync(p, { force: true });
+    }
+    await sh('xcrun', ['simctl', 'privacy', this.udid, 'reset', 'all', this.bundleId]).catch(() => {});
+  }
+
+  // Uninstall and install a build (.app): the app starts like it was just installed.
+  async reinstall(appPath) {
+    if (!fs.existsSync(appPath)) throw new Error(`${appPath} not found · the .app from Xcode (Product → Show Build Folder) or your CI`);
+    await sh('xcrun', ['simctl', 'terminate', this.udid, this.bundleId]).catch(() => {});
+    await sh('xcrun', ['simctl', 'uninstall', this.udid, this.bundleId]).catch(() => {});
+    await sh('xcrun', ['simctl', 'install', this.udid, appPath]);
   }
 
   // Bring the running app back to the front without restarting it.

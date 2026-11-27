@@ -1,5 +1,48 @@
 # Changelog
 
+## Unreleased
+
+### PIN
+- New setting `auth.pin` (`SNAPPCRAWL_PIN`, or the *pin* field in the web UI): a PIN of any length that the app asks for. On a number pad the digits are tapped one by one, otherwise it is typed into the field. A send button is tapped if needed, and a confirmation prompt gets it once more.
+- A wrong PIN is never retried on the same prompt (it could lock the account): the crawl warns and pauses for you. Without a PIN it pauses too. The log shows only the number of digits.
+- A login followed by a PIN is handled in one go.
+
+### Two builds side by side
+- `crawl --bundle com.acme.app --then com.acme.app.beta`: crawls the first app as the baseline, then the second against it, then compares. Web UI: Setup → App → *then crawl*.
+- `--against <bundle>` (`crawl.against`, UI field): one run compared with the baseline of another app. It follows that baseline and takes over its intro mode. The run stores `meta.against` and `meta.baseline`.
+- `diff`, `review`, `report` and the Compare tab without arguments compare such a pair.
+
+### Label and place: renamed and moved buttons
+- Buttons of a run are paired with the baseline's by accessibility id, label, then place (relative to the screen size). The same place with another label counts as **renamed**, the same label at another place as **moved**.
+- Following the baseline, a renamed or moved button is tapped as the baseline's, and the screen behind it is matched to the baseline's screen (from a similarity of 0.6). The log says whether a renamed button leads where the old one did. A button that only shares the place gets no second try.
+- Reports (UI, HTML, CLI) list renamed, moved and removed buttons per screen, each with *leads to the same screen* or *leads elsewhere*. List cells and links give no hints.
+
+### Comparable runs: follow the baseline
+- A run with a baseline repeats it first. It visits the baseline's screens in the order the baseline explored them, each with its actions in the baseline's order. A tap that leads somewhere else is tried once more after a fresh start.
+- At the screen limit the baseline's screens are still visited; the limit applies to what is new.
+- Every screen stores the baseline screen it matches (`base`), and `diff` matches by that first. Each run stores its exploration order (`meta.order`).
+- Two crawls of Maps in the simulator with 12 screens: freely, 1 new and 1 unreachable screen. Following the baseline: 12 of 12 found again, nothing unreachable.
+- `--no-follow` / `crawl.follow: false` / UI checkbox to explore freely.
+- Fix: two runs started in the same second no longer share a folder.
+- Fix: after a tap or a launch, the screen is read until it stands still: two reads with the same layout, not empty. A read during a push animation used to list the old and the new screen at once, for example the iOS Settings list plus *Bedienungshilfen* with 29 elements instead of 16. Such a screen got wrong actions, the way back to it failed, and the pages behind it were missing from the run. Runs made before this fix can be poor baselines, so crawl a new one.
+
+### App intro: skip it or see it in every run
+- New option `--intro keep|skip|fresh` (`crawl.intro`, UI: Setup → app intro) for screens an app shows only on its first start.
+- `skip`: a warm-up before the crawl taps through the intro (skip and continue buttons, dismiss labels), allows permission prompts and accepts cookie banners. It restarts the app until it opens the same way twice, then crawls without the intro.
+- `fresh`: resets the app before the crawl, so every run, including the comparison, has the intro. On the simulator it clears the data folder and permissions; `--reinstall <App.app>` uninstalls and installs a build (simulator and iPhone); on an iPhone without a build the crawl pauses and asks you to reinstall the app.
+- With `skip` and `fresh` a cookie banner is accepted. With `fresh` it stays in the map as a one-time screen, and hints at the start are not tapped away.
+- Without `--intro` a run uses the mode of the app's baseline. The mode is stored in `meta.intro`. In `keep` mode the log names the one-time screens and points to `fresh` and `skip`.
+
+### Crawl order: navigation first
+- On every screen, elements are tapped by tier: preferred labels, then navigation (tab bar, navigation bar, toolbar, segmented control, menu buttons), then other buttons, then list cells and links. Within a tier: top to bottom, left to right. Before, the order was only by position, so the tab bar at the bottom came last.
+- The queue follows the same tiers within a level: screens reached through navigation are explored before those reached through buttons and list items. Still level by level.
+- Each tab is tapped once per run. On other screens the same tab only adds the known transition, without a tap and the way back.
+- Bars are found by position (an element counts when at least 75 % of it lies inside the bar), so they also work in the simulator, where idb reports them as plain groups. The simulator's back button is recognised by its role even when it carries the previous screen's title: it is no longer tapped as an action, and is used to go back instead of restarting the app.
+- New option `--prefer a,b` / `crawl.prefer`: labels tapped before everything else, in the order given.
+- New option `--max-per-list n` / `crawl.maxPerList`: only the first n cells of each list.
+- Both in the web UI (Setup → Limits and interruptions). `config set` stores list settings (`crawl.prefer`, `crawl.blocklist`, `crawl.dismiss`) as lists.
+- README: a new section "Crawl order" explains the algorithm and the options.
+
 ## 0.3.0 · 2026-11-26
 
 ### New name: snappcrawl

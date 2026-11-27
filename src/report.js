@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import pngjs from 'pngjs';
+import { describeMove } from './pairing.js';
 
 const { PNG } = pngjs;
 
@@ -19,6 +20,21 @@ const p2 = (n) => String(n).padStart(2, '0');
 const fmtDate = (d) => {
   const x = d ? new Date(d) : null;
   return x && !Number.isNaN(x.getTime()) ? `${x.getFullYear()}-${p2(x.getMonth() + 1)}-${p2(x.getDate())} ${p2(x.getHours())}:${p2(x.getMinutes())}` : '';
+};
+
+// Buttons renamed, moved or removed on a screen (see pairing.js), one line each.
+const leads = (same) => (same === true ? ' · leads to the same screen' : same === false ? ' · leads elsewhere' : '');
+// Long labels are cut, removed buttons listed up to 5.
+const q = (l) => `"${String(l).length > 40 ? String(l).slice(0, 39) + '…' : l}"`;
+export const hintLines = (s) => {
+  const h = s.hints;
+  if (!h) return [];
+  const gone = h.removed.slice(0, 5).map(q).join(', ') + (h.removed.length > 5 ? ` and ${h.removed.length - 5} more` : '');
+  return [
+    ...h.renamed.map((r) => `renamed ${q(r.from)} → ${q(r.to)} · same place${leads(r.same)}`),
+    ...h.moved.map((m) => `moved ${q(m.label)} · ${describeMove(m)}${leads(m.same)}`),
+    ...(h.removed.length ? [`removed ${gone}`] : []),
+  ];
 };
 
 /* ---------- review ---------- */
@@ -241,6 +257,7 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}
 .frame{position:relative;border:1px solid var(--line2);border-radius:8px;overflow:hidden;background:#000;aspect-ratio:var(--ar,.4613)}
 .frame img{display:block;width:100%;height:100%;object-fit:cover}.frame svg{position:absolute;inset:0;width:100%;height:100%}
 .noimg{display:grid;place-content:center;height:100%;font:11px var(--mono);color:var(--dim);text-align:center;padding:12px;background:var(--s1)}
+.hints{list-style:none;margin:10px 0 0;padding:0;font:12px var(--mono);color:var(--fg)}.hints li{padding:2px 0}
 .facts{display:flex;flex-wrap:wrap;gap:4px 18px;font:12px var(--mono);color:var(--mut);margin:14px 0 0}.facts b{color:var(--fg);font-weight:400}
 .note{border-left:2px solid var(--line2);padding:2px 0 2px 12px;margin:14px 0 0;font-size:13px}.note b{display:block;font:11px var(--mono);color:var(--mut);font-weight:400}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:14px}
@@ -314,6 +331,7 @@ function card(report, s, image) {
 <div class="ch"><div><h3>${esc(s.name)}</h3><p class="path">${['start', ...s.path].map(esc).join(' → ')}</p></div><div class="tags"><span class="tag t-${s.status}">${esc(s.reason || STATUS[s.status])}</span><span class="tag t-${d}">${d}</span></div></div>
 <div class="trip">${figure(`base · ${report.base.label || report.base.id}`, base, { empty: s.status === 'new' ? 'not in base' : 'no screenshot' })}${figure(`head · ${report.head.label || report.head.id}`, head, { boxes: s.boxes, size: s.size, empty: s.reason === 'crash' ? 'app crashed<br>before render' : s.reason === 'unreachable' ? 'not reached' : 'no screenshot' })}${figure('pixel diff', diff, { empty: 'no diff' })}</div>
 <p class="facts">${facts.map(([k, v]) => `<span>${k} <b>${esc(v)}</b></span>`).join('')}</p>
+${hintLines(s).length ? `<ul class="hints">${hintLines(s).map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
 ${note ? `<div class="note"><b>note · ${esc(note.model)} · ${esc(note.verdict)}</b>${esc(note.summary)}</div>` : ''}
 </article>`;
 }
@@ -347,7 +365,7 @@ export function renderReport({ store, report, type = 'summary', version = '' }) 
     const d = decisionOf(report, s);
     const note = report.notes?.[s.id]?.summary;
     const name = full ? `<a href="#s-${esc(s.id)}">${esc(s.name)}</a>` : esc(s.name);
-    return `<tr><td>${name}<small>${esc(s.id)}</small>${note ? `<div class="nt">${esc(note)}</div>` : ''}</td><td class="m">${['start', ...s.path].map(esc).join(' → ')}</td><td><span class="tag t-${s.status}">${esc(s.reason || STATUS[s.status])}</span></td><td class="n">${pct(s.ratio)}</td><td><span class="tag t-${d}">${d}</span></td></tr>`;
+    return `<tr><td>${name}<small>${esc(s.id)}</small>${note ? `<div class="nt">${esc(note)}</div>` : ''}${hintLines(s).map((l) => `<div class="nt">${esc(l)}</div>`).join('')}</td><td class="m">${['start', ...s.path].map(esc).join(' → ')}</td><td><span class="tag t-${s.status}">${esc(s.reason || STATUS[s.status])}</span></td><td class="n">${pct(s.ratio)}</td><td><span class="tag t-${d}">${d}</span></td></tr>`;
   }).join('\n');
 
   let extra = '';

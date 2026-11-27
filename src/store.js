@@ -26,7 +26,11 @@ export class Store {
     const d = new Date();
     const p = (n) => String(n).padStart(2, '0');
     const id = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
-    return label ? `${id}-${slug(label)}` : id;
+    const tail = label ? `-${slug(label)}` : '';
+    // two runs in the same second (tests, a crawl that ends at once) must not share a folder
+    let run = `${id}${tail}`;
+    for (let n = 2; fs.existsSync(this.runDir(run)); n++) run = `${id}-${n}${tail}`;
+    return run;
   }
 
   runDir(id) {
@@ -62,6 +66,7 @@ export class Store {
             device: a.meta.device?.name || '',
             screens: a.screens.length,
             crashes: a.screens.filter((s) => s.crash).length,
+            ...(a.meta.against ? { against: a.meta.against, baseline: a.meta.baseline } : {}),
           };
         } catch {
           return null;
@@ -103,8 +108,11 @@ export class Store {
 
   // Default comparison: the app of the newest finished run, its baseline as base, and the newest
   // run of that app created after the baseline as head. Never picks an older run on its own.
+  // A newest run crawled against another app (crawl --then, --against) is compared with that baseline.
   defaultPair() {
     const runs = this.listRuns().filter((r) => r.status === 'done');
+    // the newest run was crawled against another app's baseline: that pair
+    if (runs[0]?.against && runs.some((r) => r.id === runs[0].baseline)) return { base: runs[0].baseline, head: runs[0].id };
     const baselines = this.readBaselines();
     const latest = runs.find((r) => baselines[r.app]);
     if (!latest) return { error: 'Need two runs of the same app. Crawl it again after your next build, or try: snappcrawl demo' };

@@ -19,12 +19,15 @@ const SCREENS = {
   detail: { title: 'Workout', els: [back, btn('Starten', 700)], taps: { Starten: 'player' } },
   player: { title: 'Player', els: [back] },
   profile: { title: 'Profil', els: [back, btn('Bearbeiten', 300), btn('Einstellungen', 360)], taps: { Bearbeiten: 'edit', Einstellungen: 'settings' } },
+  // the same profile with what was behind it still on screen (like a half-open sheet): a timing effect
+  profile2: { title: 'Profil', els: [back, btn('Bearbeiten', 300), btn('Einstellungen', 360), text('Orte', 500), text('Privat', 540), text('Arbeit', 580), btn('Neu', 620), btn('Reiseführer', 680)], taps: { Bearbeiten: 'edit', Einstellungen: 'settings' } },
+  news: { title: 'Neuigkeiten', els: [back] },
   edit: { title: 'Profil bearbeiten', els: [back] },
   settings: { title: 'Einstellungen', els: [back, btn('Mitteilungen', 300), btn('Abmelden', 600)], taps: { Mitteilungen: 'notif', Abmelden: 'LOGOUT' } },
   notif: { title: 'Mitteilungen', els: [back] },
 };
 
-const WIRE = { splash: 'splash', login: 'login', home: 'home', workouts: 'workouts', detail: 'detail', player: 'player', profile: 'profile', edit: 'edit', settings: 'settings', notif: 'notif', otp: 'login' };
+const WIRE = { profile2: 'profile', news: 'home', splash: 'splash', login: 'login', home: 'home', workouts: 'workouts', detail: 'detail', player: 'player', profile: 'profile', edit: 'edit', settings: 'settings', notif: 'notif', otp: 'login' };
 
 // Optional real-world noise (all off by default):
 //   sheet: 'first' | 'always'  an onboarding sheet ("Alles klar") over the start screen
@@ -33,6 +36,13 @@ const WIRE = { splash: 'splash', login: 'login', home: 'home', workouts: 'workou
 //   external: true             home has "Website" (opens Safari), profile a web link "Impressum"
 //   ad: true                   a web ad banner on every screen whose text changes on every read
 //   onboarding: true           a welcome screen on the very first launch only ("Loslegen")
+//   flaky: n                   the n-th tap on "Profil" (home) shows the profile with leftovers behind it
+//   extra: true                home has a new button "Neu" (a new screen, before "Workouts")
+//   lag: n                     after a tap that opens a screen, the next n reads show the old and the new
+//                              screen at once (a push animation), the one after an empty screen (loading)
+//   changes: { screen: { label: { label, y, to } } }  a button renamed, moved, or leading elsewhere
+//   pin: { code, pad }         an app lock on every start: a number pad (pad: true, sends on the
+//                              last digit) or a secure field with "Weiter"; a wrong PIN is counted
 //   feed: true                 home has a news cell and an ad cell whose texts change on every read
 const HEADLINES = ['Dow erases losses to end positive', 'DAX klettert auf Rekordhoch', 'Ölpreis fällt den dritten Tag'];
 const SPONSORS = ['Fisher Investments', 'günstig-heizen.de', 'Depot24'];
@@ -41,8 +51,13 @@ const sheetEls = () => [text('Neu: Watchlists', 300), text('Behalte deine Kurse 
 const consentEls = () => [text('Ihre Privatsphäre ist uns wichtig', 200), text('Wir verwenden Cookies, wenn Sie auf Alle akzeptieren tippen.', 260), btn('Alle akzeptieren', 600), btn('Alle ablehnen', 660), { ...btn('Datenschutzerklärung', 720, 'Link'), web: true }];
 
 export class FakeApp {
-  constructor({ user = 'lena@pulse.app', pass = 'secret', secret = 'JBSWY3DPEHPK3PXP', sheet = false, consent = false, alert = false, external = false, ad = false, onboarding = false, feed = false } = {}) {
-    Object.assign(this, { user, pass, secret, sheet, consent, alertOn: alert, external, ad, onboarding, feed });
+  constructor({ user = 'lena@pulse.app', pass = 'secret', secret = 'JBSWY3DPEHPK3PXP', sheet = false, consent = false, alert = false, external = false, ad = false, onboarding = false, feed = false, flaky = 0, extra = false, lag = 0, changes = {}, pin = null } = {}) {
+    Object.assign(this, { user, pass, secret, sheet, consent, alertOn: alert, external, ad, onboarding, feed, flaky, extra, lag, changes, pin });
+    this.pinFails = 0;
+    this.pinOk = 0;
+    this.pinTyped = '';
+    this.moving = null; // { from, reads } while a screen is still animating in
+    this.profileTaps = 0;
     this.feedReads = 0;
     this.onboarded = false;
     this.adReads = 0;
@@ -78,9 +93,27 @@ export class FakeApp {
     this.fields = {};
     this.overlay = this.onboarding && !this.onboarded ? 'welcome' : this.consent && !this.consentDecision ? 'consent' : this.sheet === 'always' || (this.sheet && !this.sheetsShown) ? 'sheet' : null;
     if (this.overlay === 'sheet') this.sheetsShown++;
+    if (!this.overlay && this.pin && this.loggedIn) this.overlay = 'pin';
+    this.pinTyped = '';
+  }
+  checkPin() {
+    if (this.pinTyped === this.pin.code) {
+      this.pinOk++;
+      this.overlay = null;
+    } else this.pinFails++;
+    this.pinTyped = '';
   }
   async activate() {
     this.front = 'app';
+  }
+  // like the simulator driver: data and permissions gone, the app starts like the first time
+  async resetData() {
+    this.resets = (this.resets || 0) + 1;
+    Object.assign(this, { running: false, onboarded: false, consentDecision: null, alertAnswer: null, sheetsShown: 0, loggedIn: false });
+  }
+  async reinstall(appPath) {
+    this.reinstalled = appPath;
+    await this.resetData();
   }
   // permission prompt, as WDA's alert endpoints see it
   get alertVisible() {
@@ -96,18 +129,43 @@ export class FakeApp {
     return this.running;
   }
   async elements() {
+    if (this.moving) {
+      const { from, reads } = this.moving;
+      const now = this.screenEls();
+      if (reads > 1) {
+        this.moving.reads--;
+        // both lists on screen, sliding: the new one comes in from the right, the old one leaves
+        const shift = (reads - 1) * 60;
+        const old = (SCREENS[from]?.els || []).filter((e) => !now.some((x) => x.label === e.label)).map((e) => ({ ...e, x: e.x - (W - shift) / 2 }));
+        return [now[0], ...now.slice(1).map((e) => ({ ...e, x: e.x + shift })), ...old];
+      }
+      this.moving = null;
+      return now.slice(0, 1); // the application only: still loading
+    }
+    return this.screenEls();
+  }
+  screenEls() {
     if (!this.running) return [{ type: 'Application', label: 'SpringBoard', x: 0, y: 0, w: W, h: H, enabled: true, value: '', id: '' }];
     if (this.front === 'safari') return [{ type: 'Application', label: 'Safari', x: 0, y: 0, w: W, h: H, enabled: true, value: '', id: '' }, text('pulse.app'), { ...btn('pulse.app/help', 200, 'Link'), web: true }];
     const appEl = { type: 'Application', label: 'Pulse', x: 0, y: 0, w: W, h: H, enabled: true, value: '', id: '' };
     if (this.overlay === 'sheet') return [appEl, ...sheetEls()];
     if (this.overlay === 'welcome') return [appEl, text('Willkommen bei Pulse', 200), btn('Loslegen', 700)];
+    if (this.overlay === 'pin') {
+      if (!this.pin.pad) return [appEl, text('Bitte PIN eingeben', 120), { ...btn('PIN', 200, 'SecureTextField'), value: '•'.repeat(this.pinTyped.length) }, btn('Weiter', 300)];
+      const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'].map((d, i) => ({ ...btn(d, 400 + Math.floor(i / 3) * 80), x: i === 9 ? 160 : 40 + (i % 3) * 120, w: 80, h: 70 }));
+      return [appEl, text('Gib deine PIN ein', 120), text('•'.repeat(this.pinTyped.length) || ' ', 200), ...keys];
+    }
     if (this.overlay === 'consent') return [appEl, ...consentEls()];
     const s = SCREENS[this.screen];
     const els = [appEl, text(s.title)];
     if (s.login) els.push({ ...btn('E-Mail', 200, 'TextField'), value: this.fields.user || '' }, { ...btn('Passwort', 280, 'SecureTextField') }, btn('Anmelden', 400));
     else if (s.otp) els.push({ ...btn('Code', 200, 'TextField'), value: this.fields.code || '' }, btn('Bestätigen', 300));
-    else els.push(...s.els);
+    else {
+      const ch = this.changes[this.screen] || {};
+      els.push(...s.els.map((e) => (ch[e.label] ? { ...e, label: ch[e.label].label ?? e.label, y: ch[e.label].y ?? e.y, orig: e.label } : e)));
+    }
     if (this.external && this.screen === 'home') els.push(btn('Website', 480));
+    if (this.extra && this.screen === 'home') els.push(btn('Neu', 250));
     if (this.feed && this.screen === 'home') {
       const n = this.feedReads++;
       els.push({ ...btn('', 540, 'Cell'), h: 60 }, text(HEADLINES[n % 3], 555), text(`vor ${n % 50 + 1} Std.`, 575));
@@ -130,6 +188,14 @@ export class FakeApp {
     if (el.alert) return this.answerAlert(el.label === 'Erlauben' ? 'accept' : 'dismiss');
     if (this.overlay === 'sheet') {
       if (el.label === 'Alles klar') this.overlay = null;
+      return;
+    }
+    if (this.overlay === 'pin') {
+      if (this.pin.pad && /^\d$/.test(el.label)) {
+        this.pinTyped += el.label;
+        if (this.pinTyped.length === this.pin.code.length) this.checkPin();
+      } else if (el.type === 'SecureTextField') this.focus = 'pin';
+      else if (el.label === 'Weiter') this.checkPin();
       return;
     }
     if (this.overlay === 'welcome') {
@@ -172,15 +238,22 @@ export class FakeApp {
       }
       return;
     }
-    let target = s.taps?.[el.label];
+    if (this.extra && this.screen === 'home' && el.label === 'Neu') return void this.stack.push('news');
+    if (this.screen === 'home' && el.label === 'Profil' && ++this.profileTaps === this.flaky) return void this.stack.push('profile2');
+    const ch = el.orig ? this.changes[this.screen]?.[el.orig] : null;
+    let target = ch?.to || s.taps?.[el.orig || el.label];
     if (typeof target === 'function') target = target(this);
     if (target === 'CRASH') this.running = false;
     else if (target === 'LOGOUT') {
       this.loggedIn = false;
       this.stack = ['splash'];
-    } else if (target) this.stack.push(target);
+    } else if (target) {
+      if (this.lag) this.moving = { from: this.screen, reads: this.lag + 1 };
+      this.stack.push(target);
+    }
   }
   async type(t) {
+    if (this.overlay === 'pin' && this.focus === 'pin') return void (this.pinTyped += t);
     if (this.focus) this.fields[this.focus] = (this.fields[this.focus] || '') + t;
   }
   async screenshot(file) {
