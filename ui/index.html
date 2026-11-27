@@ -598,6 +598,7 @@ async function loadCompare() {
   // default (same as the CLI): the newest run of an app created after its baseline; a picked head may go either way
   if (!C.head && P.head) { C.head = P.head; C.base = P.base; }
   const headRun = runs.find((r) => r.id === C.head);
+  if (headRun && !C.base && headRun.against && runs.some((r) => r.id === headRun.baseline)) C.base = headRun.baseline; // crawled against another app
   if (headRun && !C.base) C.base = (B[headRun.app] !== headRun.id && B[headRun.app]) || runs.find((r) => r.app === headRun.app && r.id !== headRun.id)?.id || '';
   if (!headRun || !C.base) {
     const why = headRun ? `Only one run of ${esc(appOf(headRun))}. Crawl the same app again after the next build.` : P.error ? esc(P.error) : 'Crawl the same app again after the next build. The first run of an app is its baseline.';
@@ -618,7 +619,8 @@ function renderCompare() {
   const C = S.cmp, R = C.report; if (!R) return;
   const runs = doneRuns(), B = S.state.baselines || {};
   const headRun = runs.find((r) => r.id === C.head) || {};
-  const same = runs.filter((r) => r.app === headRun.app);
+  // runs of the same app, and the baseline of another app this run was crawled against
+  const same = runs.filter((r) => r.app === headRun.app || r.id === headRun.baseline || r.id === C.base);
   const opt = (r, cur) => `<option value="${esc(r.id)}"${r.id === cur ? ' selected' : ''}>${esc(runName(r))}${B[r.app] === r.id ? ' · baseline' : ''}</option>`;
   const apps = [...new Set(runs.map((r) => r.app))];
   const headSel = apps.map((app) => `<optgroup label="${esc(appOf(runs.find((r) => r.app === app)))}">${runs.filter((r) => r.app === app).map((r) => opt(r, C.head)).join('')}</optgroup>`).join('');
@@ -628,7 +630,7 @@ function renderCompare() {
   const h1 = open.length ? `${open.length} of ${R.screens.length} screens need review` : rejected ? `Reviewed · ${rejected} rejected` : 'Reviewed · no open changes';
   $('#cmphead').innerHTML = `<div><p class="sub" style="margin:0 0 6px;color:var(--fg)">${esc(appOf(headRun))} <span style="color:var(--mut)">· ${esc(headRun.app || '')}</span></p><h1>${h1}</h1><p class="sub">base <select class="sel2" data-c="base" aria-label="baseline run">${baseSel}</select> → head <select class="sel2" data-c="head" aria-label="run to check">${headSel}</select></p></div>
     <div style="display:grid;gap:10px;justify-items:end"><div class="filters">${Object.entries(STATUS).filter(([k]) => k !== 'skipped' || R.summary.skipped).map(([k, l]) => `<button class="fbtn${C.filter === k ? ' on' : ''}" data-f="${k}" aria-pressed="${C.filter === k}"><i class="k-${k}"></i>${l} ${R.summary[k]}</button>`).join('')}</div>
-    <div class="prog"><span>reviewed ${review.length - open.length}/${review.length}</span><span class="pb"><i style="width:${review.length ? ((review.length - open.length) / review.length) * 100 : 100}%"></i></span>${exportMenu()}</div></div>`;
+    <div class="prog"><span>reviewed ${review.length - open.length}/${review.length}</span><span class="pb"><i style="width:${review.length ? ((review.length - open.length) / review.length) * 100 : 100}%"></i></span>${exportMenu()}<button class="btn sm" data-go="setup">New crawl</button></div></div>`;
   const nodes = R.screens.map((s) => ({ id: s.id, name: s.name, depth: s.depth, status: s.status, cls: [decided(s.id) ? 'r-' + decided(s.id) : '', s.oneTime ? 'one' : ''].join(' ').trim(), img: file(s.headImg || s.baseImg), placeholder: s.reason === 'crash' ? 'crash' : 'no screen', foot: s.status === 'changed' ? `Δ ${pct(s.ratio)}` : s.status === 'same' ? 'Δ 0.00 %' : s.reason || s.status }));
   const st = Object.fromEntries(R.screens.map((s) => [s.id, s.status]));
   const edges = R.edges.map((e) => ({ ...e, kind: st[e.to] === 'bad' ? 'bad' : st[e.to] === 'new' ? 'new' : '' }));

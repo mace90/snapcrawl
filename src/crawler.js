@@ -871,7 +871,7 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
         prog.done++;
         progress();
         const p = locate(o.els, act);
-        log('STEP', `tap "${act.label || act.type}" on ${s.id}`);
+        log('STEP', `tap "${clip(act.label || act.type, 60)}" on ${s.id}`);
         if (act.tab) tabs.set(tabKey(act), null);
         event('tap', { screen: s.id, x: p.x, y: p.y, size: s.size });
         await driver.tap(p.x, p.y);
@@ -880,7 +880,7 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
         const state = await appState();
         if (state !== 4 && state > 1) {
           // Safari or another app came to the front: note it, go back, register nothing
-          warn(`left app after tap "${act.label || act.type}" on ${s.id} · returning`);
+          warn(`left app after tap "${clip(act.label || act.type, 60)}" on ${s.id} · returning`);
           await (driver.activate ? driver.activate() : driver.launch());
           await settle();
           continue;
@@ -896,7 +896,7 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
             event('screen', { id: cs.id, name: cs.name, depth: cs.depth, crash: true });
           }
           addEdge(s, cs, act);
-          log('ERROR', `app.crash after tap "${act.label || act.type}" on ${s.id}`);
+          log('ERROR', `app.crash after tap "${clip(act.label || act.type, 60)}" on ${s.id}`);
           save();
           continue;
         }
@@ -927,7 +927,7 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
           }
         }
         if (rootApp && appLabel(n.els) && appLabel(n.els) !== rootApp) {
-          warn(`left app after tap "${act.label || act.type}" on ${s.id} (${appLabel(n.els)} in front) · returning`);
+          warn(`left app after tap "${clip(act.label || act.type, 60)}" on ${s.id} (${appLabel(n.els)} in front) · returning`);
           await (driver.activate ? driver.activate() : driver.launch());
           await settle();
           continue;
@@ -938,7 +938,7 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
         }
         let t = known(n);
         if (!t && isConsent(n.els) && !(autoConsent() && consentAccept(n.els))) {
-          warn(`cookie or privacy screen after tap "${act.label || act.type}" on ${s.id} · skipped, not decided automatically`);
+          warn(`cookie or privacy screen after tap "${clip(act.label || act.type, 60)}" on ${s.id} · skipped, not decided automatically`);
           continue;
         }
         if (!t) {
