@@ -3,7 +3,7 @@ import path from 'node:path';
 
 const slug = (s) => String(s).replace(/[^a-z0-9.]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
 
-// All output lives in one folder (default .snapcrawl/):
+// All output lives in one folder (default .snappcrawl/):
 //   runs/<runId>/atlas.json + screens/*.png
 //   diffs/<base>__<head>/report.json + *.png
 //   reports/*.html  (exported reports)
@@ -107,13 +107,19 @@ export class Store {
     const runs = this.listRuns().filter((r) => r.status === 'done');
     const baselines = this.readBaselines();
     const latest = runs.find((r) => baselines[r.app]);
-    if (!latest) return { error: 'Need two runs of the same app. Crawl it again after your next build, or try: snapcrawl demo' };
+    if (!latest) return { error: 'Need two runs of the same app. Crawl it again after your next build, or try: snappcrawl demo' };
     const app = latest.appName || latest.app;
     const base = runs.find((r) => r.id === baselines[latest.app]);
-    if (!base) return { error: `${app}: the baseline ${baselines[latest.app]} was not found. Set one with: snapcrawl baseline <run>` };
+    if (!base) return { error: `${app}: the baseline ${baselines[latest.app]} was not found. Set one with: snappcrawl baseline <run>` };
     const head = runs.find((r) => r.app === latest.app && r.id !== base.id && String(r.created) > String(base.created));
     if (!head) return { error: `${app}: nothing newer than the baseline ${base.label || base.id}. Crawl again, or pass base and head explicitly.` };
     return { base: base.id, head: head.id };
+  }
+
+  clearBaseline(app) {
+    const all = this.readBaselines();
+    delete all[app];
+    fs.writeFileSync(path.join(this.root, 'baselines.json'), JSON.stringify(all, null, 2) + '\n');
   }
 
   diffDir(base, head) {

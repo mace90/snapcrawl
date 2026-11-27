@@ -61,7 +61,7 @@ export function aiReady(ai) {
 
 export async function annotate({ store, report, cfg, onProgress = () => {} }) {
   const ai = cfg.ai;
-  if (!aiReady(ai)) throw new Error('No AI provider configured. Run: snapcrawl config set ai.provider anthropic (and set ANTHROPIC_API_KEY)');
+  if (!aiReady(ai)) throw new Error('No AI provider configured. Run: snappcrawl config set ai.provider anthropic (and set ANTHROPIC_API_KEY)');
   const todo = report.screens.filter((s) => s.status !== 'same' && s.status !== 'skipped' && !report.notes[s.id] && (s.headImg || s.baseImg));
   let done = 0;
   for (const s of todo) {

@@ -7,12 +7,14 @@ import { FakeApp } from './fake-app.js';
 // A WebDriverAgent look-alike on top of FakeApp, so the real-device driver and a full crawl
 // can be tested without an iPhone. `legacy: true` mimics an older WDA: no /wda/tap (only
 // /wda/tap/0), no /wda/apps/state (only /wda/activeAppInfo), string flags, frame strings.
-export async function startFakeWda({ app = new FakeApp(), legacy = false, actionsOnly = false } = {}) {
-  const state = { locked: false }; // true: like WDA after the iPhone was locked
+export async function startFakeWda({ app = new FakeApp(), legacy = false, actionsOnly = false, launchDenied = false } = {}) {
+  // locked: every session call fails, like WDA after the iPhone was locked
+  // halfLocked: only reading the screen fails; status, activeAppInfo and the rest still answer
+  const state = { locked: false, halfLocked: false };
   const calls = [];
   let sid = null;
   let n = 0;
-  const shotFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'snapcrawl-wda-')), 'shot.png');
+  const shotFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'snappcrawl-wda-')), 'shot.png');
 
   const node = (e) => ({
     type: 'XCUIElementType' + e.type,
@@ -52,7 +54,7 @@ export async function startFakeWda({ app = new FakeApp(), legacy = false, action
     const m = url.pathname.match(/^\/session\/([^/]+)/);
     if (m && m[1] !== sid) return err(res, 404, 'invalid session id', 'Session does not exist');
     const ok = (value = null) => send(res, 200, { value, sessionId: sid });
-    if (state.locked && m) return err(res, 500, 'unknown error', 'The previously found element "Application \'com.apple.springboard\'" is not present in the current view anymore. Original error: Not authorized for performing UI testing actions.');
+    if ((state.locked && m) || (state.halfLocked && route === 'GET /session/:id/source')) return err(res, 500, 'unknown error', 'The previously found element "Application \'com.apple.springboard\'" is not present in the current view anymore. Original error: Not authorized for performing UI testing actions.');
     const unknown = () => err(res, 404, 'unknown command', `Unhandled endpoint: ${url.pathname}`);
 
     switch (route) {
@@ -65,7 +67,8 @@ export async function startFakeWda({ app = new FakeApp(), legacy = false, action
       case 'GET /session/:id/source':
         return ok(await source());
       case 'GET /session/:id/wda/screen':
-        return legacy ? unknown() : ok({ statusBarSize: { width: 393, height: 54 }, scale: 3 });
+        // after a lock the real WDA reports a status bar of 0×0
+        return legacy ? unknown() : ok({ statusBarSize: state.halfLocked ? { width: 0, height: 0 } : { width: 393, height: 54 }, scale: 3 });
       case 'POST /session/:id/wda/tap':
         if (legacy || actionsOnly) return unknown();
         await app.tap(body.x, body.y);
@@ -84,6 +87,8 @@ export async function startFakeWda({ app = new FakeApp(), legacy = false, action
         await app.type(body.value.join(''));
         return ok();
       case 'POST /session/:id/wda/apps/launch':
+        // as a real iPhone answers for an app whose free provisioning profile expired
+        if (launchDenied) return err(res, 500, 'unknown error', 'Error Domain=FBSOpenApplicationServiceErrorDomain Code=1 "The request to open "com.pulse.app" failed." UserInfo={BSErrorCodeDescription=RequestDenied, NSLocalizedFailureReason=Unable to launch com.pulse.app because it has an invalid code signature, inadequate entitlements or its profile has not been explicitly trusted by the user.}');
         await app.launch();
         return ok();
       case 'POST /session/:id/wda/apps/activate':
@@ -122,6 +127,7 @@ export async function startFakeWda({ app = new FakeApp(), legacy = false, action
     calls,
     dropSession: () => (sid = 'gone'),
     lock: () => (state.locked = true),
+    halfLock: () => (state.halfLocked = true),
     close: () => new Promise((r) => server.close(r)),
   };
 }

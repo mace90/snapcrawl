@@ -7,7 +7,7 @@ import net from 'node:net';
 // Wire format: a 16 byte little-endian header (length incl. header, version 1, type 8 = plist, tag)
 // followed by an XML property list.
 
-export const USBMUXD_SOCKET = process.env.SNAPCRAWL_USBMUXD || '/var/run/usbmuxd';
+export const USBMUXD_SOCKET = process.env.SNAPPCRAWL_USBMUXD || process.env.SNAPCRAWL_USBMUXD || '/var/run/usbmuxd';
 
 /* ---------- minimal XML plist ---------- */
 
@@ -82,7 +82,7 @@ function frame(obj, tagNo = 1) {
   return Buffer.concat([h, body]);
 }
 
-const BASE = { ClientVersionString: 'snapcrawl', ProgName: 'snapcrawl', kLibUSBMuxVersion: 3 };
+const BASE = { ClientVersionString: 'snappcrawl', ProgName: 'snappcrawl', kLibUSBMuxVersion: 3 };
 
 // Send one message, read one reply. The socket stays open (paused) for Connect.
 function request(msg, { socketPath = USBMUXD_SOCKET, timeout = 5000 } = {}) {

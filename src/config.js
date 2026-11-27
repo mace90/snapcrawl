@@ -2,9 +2,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DEFAULT_DISMISS } from './interrupts.js';
+import { CONFIG_FILE, DATA_DIR, HOME, LEGACY_CONFIG_FILE, LEGACY_DATA_DIR, LEGACY_HOME, env, envValue, pick } from './legacy.js';
 
-export const GLOBAL_FILE = path.join(os.homedir(), '.snapcrawl', 'config.json');
-export const LOCAL_FILE = 'snapcrawl.config.json';
+export const GLOBAL_FILE = path.join(HOME, 'config.json');
+export const LOCAL_FILE = CONFIG_FILE;
+// read the old global config while the new one does not exist
+const globalFile = () => pick(GLOBAL_FILE, path.join(LEGACY_HOME, 'config.json'));
 
 export const DEFAULTS = {
   app: { bundleId: '' },
@@ -44,7 +47,7 @@ export const DEFAULTS = {
     apiKey: '',
     baseUrl: '',
   },
-  outDir: '.snapcrawl',
+  outDir: '.snappcrawl',
 };
 
 export const AI_DEFAULT_MODEL = {
@@ -71,33 +74,34 @@ function merge(base, over) {
 
 // "env:NAME" values are read from the environment, so secrets never live in the config file.
 function resolveEnv(v) {
-  if (typeof v === 'string' && v.startsWith('env:')) return process.env[v.slice(4)] || '';
+  if (typeof v === 'string' && v.startsWith('env:')) return envValue(v.slice(4)) || '';
   if (Array.isArray(v)) return v.map(resolveEnv);
   if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, resolveEnv(x)]));
   return v;
 }
 
 export function loadConfig(file) {
-  const local = path.resolve(file || LOCAL_FILE);
-  let cfg = merge(DEFAULTS, readJson(GLOBAL_FILE));
+  const local = path.resolve(file || pick(LOCAL_FILE, LEGACY_CONFIG_FILE));
+  let cfg = merge(DEFAULTS, readJson(globalFile()));
   cfg = merge(cfg, readJson(local));
   cfg = resolveEnv(cfg);
 
-  const env = process.env;
-  cfg.auth.username ||= env.SNAPCRAWL_USERNAME || '';
-  cfg.auth.password ||= env.SNAPCRAWL_PASSWORD || '';
-  cfg.auth.totpSecret ||= env.SNAPCRAWL_TOTP_SECRET || '';
+  cfg.auth.username ||= env('USERNAME') || '';
+  cfg.auth.password ||= env('PASSWORD') || '';
+  cfg.auth.totpSecret ||= env('TOTP_SECRET') || '';
   if (!cfg.ai.apiKey) {
-    if (cfg.ai.provider === 'anthropic') cfg.ai.apiKey = env.ANTHROPIC_API_KEY || '';
-    if (cfg.ai.provider === 'openai') cfg.ai.apiKey = env.OPENAI_API_KEY || '';
+    if (cfg.ai.provider === 'anthropic') cfg.ai.apiKey = process.env.ANTHROPIC_API_KEY || '';
+    if (cfg.ai.provider === 'openai') cfg.ai.apiKey = process.env.OPENAI_API_KEY || '';
   }
+  // the default data folder: the old one while only it exists
+  if (cfg.outDir === DATA_DIR) cfg.outDir = pick(DATA_DIR, LEGACY_DATA_DIR);
   cfg.ai.model ||= AI_DEFAULT_MODEL[cfg.ai.provider] || '';
   cfg._file = fs.existsSync(local) ? local : null;
   return cfg;
 }
 
 export function getGlobal() {
-  return readJson(GLOBAL_FILE) || {};
+  return readJson(globalFile()) || {};
 }
 
 export function setGlobal(key, value) {
@@ -111,6 +115,7 @@ export function setGlobal(key, value) {
   node[parts.at(-1)] = v;
   fs.mkdirSync(path.dirname(GLOBAL_FILE), { recursive: true });
   fs.writeFileSync(GLOBAL_FILE, JSON.stringify(data, null, 2), { mode: 0o600 });
+  fs.chmodSync(GLOBAL_FILE, 0o600); // also when the file existed before with other rights
   return data;
 }
 
@@ -118,10 +123,10 @@ export const TEMPLATE = {
   app: { bundleId: 'com.example.myapp' },
   device: { platform: 'ios-sim', udid: 'booted' },
   auth: {
-    username: 'env:SNAPCRAWL_USERNAME',
-    password: 'env:SNAPCRAWL_PASSWORD',
+    username: 'env:SNAPPCRAWL_USERNAME',
+    password: 'env:SNAPPCRAWL_PASSWORD',
     mfa: 'none',
-    totpSecret: 'env:SNAPCRAWL_TOTP_SECRET',
+    totpSecret: 'env:SNAPPCRAWL_TOTP_SECRET',
     fallbackManual: true,
   },
   crawl: { maxDepth: 8, maxScreens: 200, timeLimitMin: 20, blocklist: DEFAULTS.crawl.blocklist },

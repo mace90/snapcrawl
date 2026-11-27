@@ -61,7 +61,7 @@ test('ios-device driver speaks WDA: elements, tap, type, app state, screenshot, 
     await d.tap(mail.x + 5, mail.y + 5);
     await d.type('lena@pulse.app');
     assert.equal((await d.elements()).find((e) => e.type === 'TextField').value, 'lena@pulse.app');
-    const file = path.join(tmp('snapcrawl-shot-'), 's.png');
+    const file = path.join(tmp('snappcrawl-shot-'), 's.png');
     await d.screenshot(file);
     assert.equal(PNG.sync.read(fs.readFileSync(file)).width, 393);
     // WDA restarted: the stale session is replaced transparently
@@ -102,7 +102,7 @@ test('ios-device: a full crawl through WebDriverAgent', async () => {
     const app = new FakeApp();
     const wda = await startFakeWda({ app, legacy });
     try {
-      const store = new Store(tmp('snapcrawl-')).ensure();
+      const store = new Store(tmp('snappcrawl-')).ensure();
       const atlas = await crawl({ driver: device(wda), cfg: config({ username: app.user, password: app.pass, mfa: 'totp', totpSecret: app.secret }), store, io: { log: () => {}, ask: async () => '' } });
       assert.equal(atlas.meta.status, 'done', atlas.meta.error);
       assert.equal(atlas.meta.device.platform, 'ios-device');
@@ -121,11 +121,24 @@ test('ios-device: a full crawl through WebDriverAgent', async () => {
 
 test('ios-device: clear message when WebDriverAgent is not reachable', async () => {
   const d = new IosDevice({ bundleId: 'x', wdaUrl: 'http://127.0.0.1:9', run: fakeDevicectl });
-  await assert.rejects(d.resolve(), /WebDriverAgent not reachable at http:\/\/127\.0\.0\.1:9 \(.+\) · run: snapcrawl wda start/);
+  await assert.rejects(d.resolve(), /WebDriverAgent not reachable at http:\/\/127\.0\.0\.1:9 \(.+\) · run: snappcrawl wda start/);
   const wda = await startFakeWda();
   wda.lock();
-  await assert.rejects(device(wda).resolve(), /lost the permission to control the iPhone .* snapcrawl wda stop && snapcrawl wda start/);
+  await assert.rejects(device(wda).resolve(), /lost the permission to control the iPhone .* snappcrawl wda stop && snappcrawl wda start/);
   await wda.close();
+  // the case from a real iPhone: everything answers except reading the screen
+  const half = await startFakeWda();
+  half.halfLock();
+  const { Wda } = await import('../src/drivers/ios-device.js');
+  assert.deepEqual(await new Wda(half.url).canControl(), { ok: false, error: (await new Wda(half.url).canControl()).error, notAuthorized: true });
+  await assert.rejects(device(half).resolve(), /lost the permission to control the iPhone/);
+  await half.close();
+  // an app iOS refuses to open: one readable line with what to do
+  const denied = await startFakeWda({ launchDenied: true });
+  const refused = device(denied);
+  await refused.resolve();
+  await assert.rejects(refused.launch(), (e) => /^iOS refuses to open com\.pulse\.app \(signature or provisioning profile\) · install the app again from Xcode/.test(e.message) && !e.message.includes('UserInfo'));
+  await denied.close();
   const none = new IosDevice({ udid: 'Nope', run: fakeDevicectl });
   await assert.rejects(none.findDevice(), /No connected iPhone matches "Nope"/);
   assert.equal(makeDriver({ platform: 'ios-device', udid: 'booted' }).udid, '');
@@ -228,7 +241,7 @@ test('usbmux: plist round trip, device list and port forwarding to WebDriverAgen
 });
 
 test('diff masks the measured status bar at any screenshot scale', () => {
-  const dir = tmp('snapcrawl-bar-');
+  const dir = tmp('snappcrawl-bar-');
   const img = (file, bar) => {
     const p = new PNG({ width: 300, height: 600 }); // e.g. a 2x screenshot of a 150×300 pt screen
     p.data.fill(255);
@@ -243,7 +256,7 @@ test('diff masks the measured status bar at any screenshot scale', () => {
 
 test('wda helpers: latest tag, bundle id, failure hints', () => {
   assert.equal(latestTag('a\trefs/tags/v9.2.0\nb\trefs/tags/v10.1.3\nc\trefs/tags/v9.14.1\nd\trefs/tags/beta\n'), 'v10.1.3');
-  assert.equal(bundleIdFor('Lena.M', 'AB12CD34EF'), 'com.lenam.snapcrawl.ab12cd34ef.WebDriverAgentRunner');
+  assert.equal(bundleIdFor('Lena.M', 'AB12CD34EF'), 'com.lenam.snappcrawl.ab12cd34ef.WebDriverAgentRunner');
   assert.match(diagnose('error: Developer Mode disabled')[0], /Developer Mode/);
   assert.match(diagnose('The application could not be launched because the Developer App Certificate is not trusted. invalid code signature')[0], /VPN & Device Management/);
   assert.deepEqual(diagnose('Unlock iPhone to Continue … later: profile has not been explicitly trusted').map((h) => h.split(' ')[0]), ['Trust', 'Unlock']);

@@ -4,11 +4,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { HOME, LEGACY_HOME, env, pick } from './legacy.js';
 
 const exec = promisify(execFile);
 
 // WebDriverAgent lives outside any project: built once per Mac, reused by every crawl.
-export const WDA_HOME = process.env.SNAPCRAWL_WDA_HOME || path.join(os.homedir(), '.snapcrawl', 'wda');
+export const WDA_HOME = env('WDA_HOME') || pick(path.join(HOME, 'wda'), path.join(LEGACY_HOME, 'wda'));
 export const WDA_REPO = 'https://github.com/appium/WebDriverAgent.git';
 export const paths = {
   repo: path.join(WDA_HOME, 'WebDriverAgent'),
@@ -71,7 +72,7 @@ export function latestTag(lsRemote) {
 // A bundle id Apple will accept for a personal team: unique per user and team.
 export function bundleIdFor(user, team) {
   const clean = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '') || 'user';
-  return `com.${clean(user)}.snapcrawl${team ? '.' + clean(team) : ''}.WebDriverAgentRunner`;
+  return `com.${clean(user)}.snappcrawl${team ? '.' + clean(team) : ''}.WebDriverAgentRunner`;
 }
 
 // Team ids from the Apple Development certificates in the login keychain (subject OU).
@@ -101,13 +102,13 @@ export async function findTeams() {
 // Common xcodebuild failures → what to do about them.
 const HINTS = [
   [/developer mode/i, 'Turn on Developer Mode on the iPhone: Settings → Privacy & Security → Developer Mode, then restart it.'],
-  [/(untrusted developer|not been explicitly trusted|invalid code signature|profile has not been explicitly trusted)/i, 'Trust the developer certificate on the iPhone: Settings → General → VPN & Device Management → your Apple ID → Trust. Then run snapcrawl wda start again.'],
+  [/(untrusted developer|not been explicitly trusted|invalid code signature|profile has not been explicitly trusted)/i, 'Trust the developer certificate on the iPhone: Settings → General → VPN & Device Management → your Apple ID → Trust. Then run snappcrawl wda start again.'],
   [/(device is locked|passcode protected|unlock)/i, 'Unlock the iPhone and keep it unlocked while WebDriverAgent starts.'],
-  [/(failed to register bundle identifier|is not available|cannot be registered)/i, 'The bundle id is taken. Run snapcrawl wda setup again with --bundle-id com.<you>.<something>.WebDriverAgentRunner.'],
+  [/(failed to register bundle identifier|is not available|cannot be registered)/i, 'The bundle id is taken. Run snappcrawl wda setup again with --bundle-id com.<you>.<something>.WebDriverAgentRunner.'],
   [/(no account for team|no signing certificate|requires a development team|no profiles for)/i, 'Sign in to Xcode with your Apple ID (Xcode → Settings → Accounts) and check --team.'],
-  [/(maximum number of apps|app id limit)/i, 'A free Apple ID allows only a few app ids per week. Reuse the existing bundle id (snapcrawl wda setup reads it from setup.json) or wait.'],
-  [/(provisioning profile.*expired|profile.*has expired)/i, 'The provisioning profile expired (free Apple IDs: after 7 days). Run snapcrawl wda setup again.'],
-  [/(unable to find a destination|no destinations? matching|device.*not available|is not connected)/i, 'Connect the iPhone by USB, unlock it and tap Trust. snapcrawl devices lists it when Xcode can see it.'],
+  [/(maximum number of apps|app id limit)/i, 'A free Apple ID allows only a few app ids per week. Reuse the existing bundle id (snappcrawl wda setup reads it from setup.json) or wait.'],
+  [/(provisioning profile.*expired|profile.*has expired)/i, 'The provisioning profile expired (free Apple IDs: after 7 days). Run snappcrawl wda setup again.'],
+  [/(unable to find a destination|no destinations? matching|device.*not available|is not connected)/i, 'Connect the iPhone by USB, unlock it and tap Trust. snappcrawl devices lists it when Xcode can see it.'],
   [/(is busy|preparing the device|copying shared cache)/i, 'Xcode is still preparing the iPhone for development. Wait until the progress in Xcode → Window → Devices and Simulators is done, then retry.'],
 ];
 
