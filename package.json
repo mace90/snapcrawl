@@ -1,19 +1,25 @@
 {
-  "name": "snapcrawl",
-  "version": "0.2.0",
+  "name": "snappcrawl",
+  "version": "0.3.0",
   "description": "Crawl your iOS app, map every screen as a graph, and catch visual regressions between builds.",
   "type": "module",
-  "bin": { "snapcrawl": "bin/snapcrawl.js" },
+  "bin": { "snappcrawl": "bin/snappcrawl.js" },
   "files": ["bin", "src", "ui", "README.md", "LICENSE"],
   "engines": { "node": ">=20" },
   "scripts": {
     "test": "node --test test/*.test.js",
-    "demo": "node bin/snapcrawl.js demo && node bin/snapcrawl.js ui"
+    "demo": "node bin/snappcrawl.js demo && node bin/snappcrawl.js ui"
   },
   "dependencies": {
     "pixelmatch": "^5.3.0",
     "pngjs": "^7.0.0"
   },
   "keywords": ["visual-regression", "ios", "simulator", "crawler", "screenshot", "testing", "qa", "idb"],
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mace90/snappcrawl.git"
+  },
+  "homepage": "https://github.com/mace90/snappcrawl#readme",
+  "bugs": { "url": "https://github.com/mace90/snappcrawl/issues" }
 }

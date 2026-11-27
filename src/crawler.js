@@ -100,6 +100,9 @@ function locate(els, ref) {
   return m ? center(m) : { x: ref.x, y: ref.y };
 }
 
+// "~4 min", "<1 min", "estimating" for an estimate in milliseconds.
+export const formatEta = (ms) => (ms == null ? 'estimating' : ms < 60_000 ? '<1 min' : `~${Math.round(ms / 60_000)} min`);
+
 const refOf = (a) => ({ type: a.type, label: a.label, id: a.id, x: a.x, y: a.y });
 
 /**
@@ -128,6 +131,30 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
     edges: [],
   };
   const save = () => store.writeRun(runId, atlas);
+
+  // Progress is an estimate: nobody knows how many screens an app has until they are found.
+  // done/total counts taps tried against taps known so far. The time left is whichever ends
+  // the crawl first: the known taps at the pace so far, the screen limit, or the time limit.
+  // pct = elapsed / (elapsed + time left), so the percentage and the time left always agree.
+  const prog = { done: 0, total: 0, t0: null };
+  function progress(final = false) {
+    const now = Date.now();
+    const elapsed = prog.t0 ? now - prog.t0 : 0;
+    const screens = atlas.screens.filter((x) => !x.crash).length;
+    let eta = final ? 0 : null;
+    let bound = 'taps';
+    if (!final && prog.done > 0) {
+      const options = [['taps', (prog.total - prog.done) * (elapsed / prog.done)], ['time', deadline - now]];
+      if (screens > 1) options.push(['screens', (c.maxScreens - screens) * (elapsed / (screens - 1))]);
+      [bound, eta] = options.reduce((a, b) => (b[1] < a[1] ? b : a));
+      eta = Math.max(0, Math.round(eta));
+    }
+    const pct = final ? 100 : eta == null || elapsed + eta === 0 ? 0 : Math.min(99, Math.round((100 * elapsed) / (elapsed + eta)));
+    const p = { pct, done: prog.done, total: prog.total, screens, maxScreens: c.maxScreens, elapsedMs: elapsed, etaMs: eta, bound };
+    atlas.meta.progress = p;
+    event('progress', p);
+    return p;
+  }
   const byFp = new Map();
   const byId = new Map();
   const names = new Map();
@@ -320,6 +347,7 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
     await driver.screenshot(path.join(dir, file));
     const consent = isConsent(o.els);
     const { actions, blocked, web } = consent ? { actions: [], blocked: [], web: [] } : actionsOf(o.els, size, c.blocklist, { webLinks: c.webLinks });
+    if (depth < c.maxDepth) prog.total += actions.length;
     const s = { id, name: uniqueName(names, nameOf(o.els, size, via)), fp: o.fp, sig: o.sig, depth, path: pathRefs, parent, screenshot: file, elements: o.els.length, size, actions, blocked };
     if (consent) s.consent = true;
     atlas.screens.push(s);
@@ -447,14 +475,26 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
 
     outer: while (queue.length) {
       const s = queue.shift();
-      if (s.depth >= c.maxDepth || s.oneTime) continue;
-      for (const act of s.actions) {
+      if (s.depth >= c.maxDepth) continue;
+      if (s.oneTime) {
+        prog.done += s.actions.length; // never shown again, nothing left to try
+        progress();
+        continue;
+      }
+      for (const [i, act] of s.actions.entries()) {
         if (limit()) {
           log('WARN', 'limit reached · stopping');
           break outer;
         }
+        prog.t0 ??= Date.now();
         const o = await goTo(s);
-        if (!o) break;
+        if (!o) {
+          prog.done += s.actions.length - i; // the rest of this screen is given up
+          progress();
+          break;
+        }
+        prog.done++;
+        progress();
         const p = locate(o.els, act);
         log('STEP', `tap "${act.label || act.type}" on ${s.id}`);
         event('tap', { screen: s.id, x: p.x, y: p.y, size: s.size });
@@ -506,6 +546,7 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
       }
     }
     atlas.meta.status = 'done';
+    progress(true);
   } catch (e) {
     atlas.meta.status = 'failed';
     atlas.meta.error = e.message;

@@ -13,7 +13,7 @@ const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
 
 // devicectl's stable interface is its JSON output file, not stdout.
 export async function devicectl(args, { timeout = 60_000 } = {}) {
-  const tmp = path.join(os.tmpdir(), `snapcrawl-devicectl-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`);
+  const tmp = path.join(os.tmpdir(), `snappcrawl-devicectl-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`);
   try {
     await exec('xcrun', ['devicectl', ...args, '--json-output', tmp, '--quiet'], { timeout, maxBuffer: 16 * 1024 * 1024 });
     return JSON.parse(fs.readFileSync(tmp, 'utf8'));
@@ -82,6 +82,13 @@ export const parseApps = (json) =>
 
 /* ---------- WebDriverAgent ---------- */
 
+// iOS error texts are long dictionaries; keep the readable reason.
+export function shortReason(msg) {
+  const s = String(msg);
+  const reason = s.match(/NSLocalizedFailureReason=([^}]+?)(?:, NS\w+=|\}|$)/)?.[1] || s.split(' UserInfo=')[0];
+  return reason.replace(/\s+/g, ' ').trim().slice(0, 220);
+}
+
 const UNKNOWN = /unknown command|unknown method|unhandled endpoint|not implemented|unsupported operation/i;
 const isUnknownRoute = (e) => (e.status === 404 || e.status === 405 || e.status === 501) && UNKNOWN.test(`${e.wdaError} ${e.message}`);
 const isBadSession = (e) => /invalid session id|session does not exist|no such session/i.test(`${e.wdaError} ${e.message}`);
@@ -98,7 +105,7 @@ export class Wda {
       res = await fetch(this.url + p, { method, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(timeout) });
     } catch (e) {
       const why = e.name === 'TimeoutError' ? `no answer within ${timeout / 1000}s` : e.cause?.code || e.message;
-      throw Object.assign(new Error(`WebDriverAgent not reachable at ${this.url} (${why}) · run: snapcrawl wda start`), { code: 'WDA_UNREACHABLE' });
+      throw Object.assign(new Error(`WebDriverAgent not reachable at ${this.url} (${why}) · run: snappcrawl wda start`), { code: 'WDA_UNREACHABLE' });
     }
     const text = await res.text();
     let json;
@@ -114,9 +121,9 @@ export class Wda {
       const msg = err?.message || (typeof v === 'string' ? v : '') || `${res.status} ${text.slice(0, 160)}`;
       // After the iPhone was locked, WDA still answers /status but may no longer drive the UI.
       if (/not authorized for performing ui testing actions/i.test(msg)) {
-        throw Object.assign(new Error('WebDriverAgent lost the permission to control the iPhone (it was probably locked) · unlock it, then: snapcrawl wda stop && snapcrawl wda start'), { code: 'WDA_NOT_AUTHORIZED', status: res.status });
+        throw Object.assign(new Error('WebDriverAgent lost the permission to control the iPhone (it was probably locked) · unlock it, then: snappcrawl wda stop && snappcrawl wda start'), { code: 'WDA_NOT_AUTHORIZED', status: res.status });
       }
-      throw Object.assign(new Error(`WebDriverAgent ${method} ${p.replace(/\/session\/[^/]+/, '/session/…')} → ${String(msg).split('\n')[0]}`), { status: res.status, wdaError: err?.error || '' });
+      throw Object.assign(new Error(`WebDriverAgent ${method} ${p.replace(/\/session\/[^/]+/, '/session/…')} → ${shortReason(String(msg).split('\n')[0])}`), { status: res.status, wdaError: err?.error || '', detail: String(msg) });
     }
     return json;
   }
@@ -129,10 +136,19 @@ export class Wda {
     return this.value('GET', '/status', null, { timeout });
   }
 
-  // /status answers even when WDA may not touch the UI; this asks for something that needs it.
+  // /status answers even when WDA may not touch the UI, and after a lock /wda/activeAppInfo
+  // quietly falls back to SpringBoard and element queries return []. Two honest signals:
+  // the status bar has a height only while WDA can read the screen (fast), and reading the
+  // element tree fails with "not authorized" (slow on a busy screen, so only when needed).
   async canControl(timeout = 15_000) {
     try {
-      await this.s('GET', '/wda/activeAppInfo', null, { timeout });
+      const screen = await this.s('GET', '/wda/screen', null, { timeout: Math.min(timeout, 8000) });
+      if (screen?.statusBarSize?.height > 0) return { ok: true };
+    } catch (e) {
+      if (e.code === 'WDA_NOT_AUTHORIZED' || e.code === 'WDA_UNREACHABLE') return { ok: false, error: e.message, notAuthorized: e.code === 'WDA_NOT_AUTHORIZED' };
+    }
+    try {
+      await this.s('GET', '/source?format=json', null, { timeout });
       return { ok: true };
     } catch (e) {
       return { ok: false, error: e.message, notAuthorized: e.code === 'WDA_NOT_AUTHORIZED' };
@@ -328,8 +344,8 @@ export class IosDevice {
     const d = this.udid ? devices.find((x) => [x.udid, x.id, x.name].includes(this.udid)) : devices[0];
     if (!d) {
       throw new Error(this.udid
-        ? `No connected iPhone matches "${this.udid}". Connect it by USB, unlock it and tap Trust · snapcrawl devices lists what is connected.`
-        : 'No iPhone connected. Connect it by USB, unlock it and tap Trust · snapcrawl devices lists what is connected.');
+        ? `No connected iPhone matches "${this.udid}". Connect it by USB, unlock it and tap Trust · snappcrawl devices lists what is connected.`
+        : 'No iPhone connected. Connect it by USB, unlock it and tap Trust · snappcrawl devices lists what is connected.');
     }
     Object.assign(this, { udid: d.udid, coreId: d.id, name: d.name, runtime: d.ios ? `iOS ${d.ios}` : 'iOS', info: d });
     return d;
@@ -355,7 +371,16 @@ export class IosDevice {
 
   async launch() {
     await this.wda.terminate(this.bundleId).catch(() => {});
-    await this.wda.launch(this.bundleId);
+    try {
+      await this.wda.launch(this.bundleId);
+    } catch (e) {
+      // apps from Xcode with a free Apple ID stop opening after 7 days
+      if (/invalid code signature|explicitly trusted|inadequate entitlements|profile/i.test(e.detail || e.message)) {
+        throw Object.assign(new Error(`iOS refuses to open ${this.bundleId} (signature or provisioning profile) · install the app again from Xcode, or trust the developer: Settings → General → VPN & Device Management`), { hints: ['Apps installed from Xcode with a free Apple ID stop opening after 7 days.'] });
+      }
+      if (/not installed|unknown bundle|no application/i.test(e.detail || e.message)) throw new Error(`${this.bundleId} is not installed on the iPhone · snappcrawl apps --device lists what is`);
+      throw e;
+    }
   }
 
   async isRunning() {

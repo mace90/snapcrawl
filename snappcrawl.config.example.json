@@ -7,10 +7,10 @@
     "udid": "booted"
   },
   "auth": {
-    "username": "env:SNAPCRAWL_USERNAME",
-    "password": "env:SNAPCRAWL_PASSWORD",
+    "username": "env:SNAPPCRAWL_USERNAME",
+    "password": "env:SNAPPCRAWL_PASSWORD",
     "mfa": "none",
-    "totpSecret": "env:SNAPCRAWL_TOTP_SECRET",
+    "totpSecret": "env:SNAPPCRAWL_TOTP_SECRET",
     "fallbackManual": true
   },
   "crawl": {

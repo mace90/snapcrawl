@@ -3,12 +3,14 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { annotate, aiReady } from './ai.js';
+import { loadConfig } from './config.js';
+import * as control from './control.js';
 import { crawl } from './crawler.js';
 import { buildReport } from './diff.js';
+import { runChecks } from './doctor.js';
 import { makeDriver } from './drivers/index.js';
-import { DEFAULT_WDA_URL, Wda, listDevices } from './drivers/ios-device.js';
+import { DEFAULT_WDA_URL, listDevices } from './drivers/ios-device.js';
 import { hasBinary, listSimulators } from './drivers/ios-sim.js';
-import { readSetup } from './wda.js';
 import { REPORT_TYPES, renderReport, reportFileName, setDecision } from './report.js';
 
 const UI = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'ui', 'index.html');
@@ -35,14 +37,17 @@ const readBody = (req) =>
     });
   });
 
-export function startServer({ store, cfg, port = 4747, version, driverFactory = makeDriver }) {
-  const clients = new Set();
-  const live = { running: false, runId: null, ask: null, log: [], abort: false };
+const bad = (message, status = 400) => Object.assign(new Error(message), { status });
 
-  const broadcast = (type, data) => {
-    const msg = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
-    for (const c of clients) c.write(msg);
-  };
+/**
+ * The API behind the web UI. Every action here calls the same functions as the CLI
+ * (see src/actions.js for the list). Exported so the routes can be checked without a server.
+ */
+export function createRoutes({ store, cfg, version, driverFactory = makeDriver, broadcast = () => {} }) {
+  const live = { running: false, runId: null, ask: null, log: [], abort: false };
+  // one long WebDriverAgent job at a time (setup or start), streamed as "job" events
+  const job = { kind: null, running: false, log: [], ok: null, error: null, hints: [] };
+  const wdaUrl = () => cfg.device.wdaUrl || DEFAULT_WDA_URL;
 
   const io = {
     log(level, msg) {
@@ -73,12 +78,30 @@ export function startServer({ store, cfg, port = 4747, version, driverFactory = 
       } catch (e) {
         error = e.message;
       }
-    } else error = 'xcrun not found: Snapcrawl needs macOS with Xcode for the iOS Simulator.';
-    // real iPhones over USB, and whether WebDriverAgent answers for them
-    const url = cfg.device.wdaUrl || DEFAULT_WDA_URL;
-    const usb = tools.xcrun ? await listDevices().catch(() => []) : [];
-    const wda = { url, built: !!readSetup(), reachable: usb.length ? !!(await new Wda(url).status(2000).catch(() => null)) : false };
-    return { tools, sims, usb, wda, error };
+    } else error = 'xcrun not found: snappcrawl needs macOS with Xcode.';
+    // real iPhones: connection, lock, Developer Mode, and the state of WebDriverAgent
+    const phones = tools.xcrun ? await listDevices().catch(() => []) : [];
+    const usb = await Promise.all(phones.map((d) => control.iphoneStatus(d, { wdaUrl: wdaUrl() })));
+    const wda = usb[0]?.wda || (await control.wdaState(wdaUrl()));
+    return { tools, sims, usb, wda: { ...wda, setup: undefined, built: wda.built, team: wda.setup?.team || '' }, error };
+  }
+
+  function startJob(kind, fn) {
+    if (job.running) throw bad(`WebDriverAgent is busy (${job.kind})`, 409);
+    Object.assign(job, { kind, running: true, log: [], ok: null, error: null, hints: [] });
+    const log = (level, msg) => {
+      const line = { t: Date.now(), level, msg };
+      job.log.push(line);
+      broadcast('job', { kind, ...line });
+    };
+    fn(log)
+      .then(() => (job.ok = true))
+      .catch((e) => Object.assign(job, { ok: false, error: e.message, hints: e.hints || [] }))
+      .finally(() => {
+        job.running = false;
+        broadcast('job-done', { kind, ok: job.ok, error: job.error, hints: job.hints });
+      });
+    return { started: true, kind };
   }
 
   const routes = {
@@ -95,12 +118,31 @@ export function startServer({ store, cfg, port = 4747, version, driverFactory = 
         mfa: cfg.auth.mfa,
         hasTotp: !!cfg.auth.totpSecret,
         fallbackManual: cfg.auth.fallbackManual,
-        crawl: { maxDepth: cfg.crawl.maxDepth, maxScreens: cfg.crawl.maxScreens, timeLimitMin: cfg.crawl.timeLimitMin, blocklist: cfg.crawl.blocklist, prepare: !!cfg.crawl.prepare },
+        crawl: { maxDepth: cfg.crawl.maxDepth, maxScreens: cfg.crawl.maxScreens, timeLimitMin: cfg.crawl.timeLimitMin, blocklist: cfg.crawl.blocklist, prepare: !!cfg.crawl.prepare, systemAlerts: cfg.crawl.systemAlerts, dismiss: cfg.crawl.dismiss },
         ai: { provider: cfg.ai.provider, model: cfg.ai.model, ready: aiReady(cfg.ai) },
         file: cfg._file,
       },
     }),
     'GET /api/devices': devices,
+    'GET /api/doctor': async () => ({ checks: await runChecks({ cfg }) }),
+    'POST /api/boot': async (q, body) => ({ sim: await control.bootSimulator(body.udid || body.name) }),
+    'GET /api/wda/status': () => control.wdaState(wdaUrl()),
+    'GET /api/wda/teams': async () => ({ teams: await control.teams() }),
+    'GET /api/job': () => job,
+    'POST /api/wda/setup': (q, body) => startJob('setup', (log) => control.wdaSetup({ team: body.team || undefined, udid: body.udid, bundleId: body.bundleId || undefined, log })),
+    'POST /api/wda/start': (q, body) => startJob('start', (log) => control.wdaStart({ udid: body.udid, url: wdaUrl(), log })),
+    'POST /api/wda/stop': () => control.wdaStop(),
+    'GET /api/runs': () => ({ runs: store.listRuns(), baselines: store.readBaselines() }),
+    'POST /api/runs/delete': (q, body) => {
+      if (live.running && live.runId === body.id) throw bad('this run is still crawling · stop it first', 409);
+      return control.deleteRun(store, body.id);
+    },
+    'GET /api/config': () => ({ settings: control.settings(), ai: { provider: cfg.ai.provider, model: cfg.ai.model, ready: aiReady(cfg.ai) } }),
+    'POST /api/config': (q, body) => {
+      const settings = control.setSetting(String(body.key || ''), body.value ?? '');
+      Object.assign(cfg.ai, loadConfig().ai); // take effect without a restart
+      return { settings, ai: { provider: cfg.ai.provider, model: cfg.ai.model, ready: aiReady(cfg.ai) } };
+    },
     'GET /api/apps': async (q) => {
       const d = makeDriver({ platform: q.get('type') === 'device' ? 'ios-device' : 'ios-sim', udid: q.get('udid') || '', wdaUrl: cfg.device.wdaUrl });
       await (d.findDevice ? d.findDevice() : d.resolve());
@@ -138,16 +180,22 @@ export function startServer({ store, cfg, port = 4747, version, driverFactory = 
       Object.assign(run.auth, Object.fromEntries(Object.entries(body.auth || {}).filter(([, v]) => v !== '' && v !== undefined)));
       Object.assign(run.crawl, Object.fromEntries(Object.entries(body.crawl || {}).filter(([, v]) => v !== '' && v !== undefined)));
       const platform = body.platform || run.device.platform;
-      const driver = driverFactory({ platform, udid: body.udid || (platform === run.device.platform ? run.device.udid : ''), bundleId: run.app.bundleId, wdaUrl: run.device.wdaUrl });
+      const udid = body.udid || (platform === run.device.platform ? run.device.udid : '');
+      const driver = driverFactory({ platform, udid, bundleId: run.app.bundleId, wdaUrl: run.device.wdaUrl });
       Object.assign(live, { running: true, runId: null, ask: null, log: [], abort: false });
-      crawl({ driver, cfg: run, store, io, label: body.label || '' })
+      // on an iPhone, WebDriverAgent is started first when it is not running
+      (platform === 'ios-device' && !body.noWdaStart ? control.ensureWda({ udid, url: run.device.wdaUrl || DEFAULT_WDA_URL, log: io.log }) : Promise.resolve())
+        .then(() => crawl({ driver, cfg: run, store, io, label: body.label || '' }))
         .then((atlas) => {
           if (atlas.meta.status === 'done' && !store.baselineFor(atlas.meta.app)) {
             store.setBaseline(atlas.meta.id);
             io.log('INFO', `first run of ${atlas.meta.appName || atlas.meta.app} · saved as baseline`);
           }
         })
-        .catch((e) => io.log('ERROR', e.message))
+        .catch((e) => {
+          io.log('ERROR', e.message);
+          for (const h of e.hints || []) io.log('WAIT', h);
+        })
         .finally(() => {
           live.running = false;
           live.ask = null;
@@ -167,7 +215,26 @@ export function startServer({ store, cfg, port = 4747, version, driverFactory = 
       live.abort = true;
       return { ok: true };
     },
+    'GET /api/export': (q) => {
+      const base = q.get('base');
+      const head = q.get('head');
+      const type = q.get('type') || 'summary';
+      if (!base || !head) throw bad('base and head are required');
+      if (!REPORT_TYPES.includes(type)) throw bad('type must be summary or full');
+      const report = store.readReport(base, head) || buildReport({ store, baseId: base, headId: head, cfg });
+      return { raw: renderReport({ store, report, type, version }), type: MIME['.html'], headers: { 'content-disposition': `attachment; filename="${reportFileName(report, type)}"` } };
+    },
   };
+  return { routes, live, job };
+}
+
+export function startServer({ store, cfg, port = 4747, version, driverFactory = makeDriver }) {
+  const clients = new Set();
+  const broadcast = (type, data) => {
+    const msg = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
+    for (const c of clients) c.write(msg);
+  };
+  const { routes } = createRoutes({ store, cfg, version, driverFactory, broadcast });
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
@@ -187,28 +254,21 @@ export function startServer({ store, cfg, port = 4747, version, driverFactory = 
         res.writeHead(200, { 'content-type': MIME[path.extname(file)] || 'application/octet-stream', 'cache-control': 'no-store' });
         return fs.createReadStream(file).pipe(res);
       }
-      if (req.method === 'GET' && url.pathname === '/api/export') {
-        const q = url.searchParams;
-        const base = q.get('base');
-        const head = q.get('head');
-        const type = q.get('type') || 'summary';
-        if (!base || !head) return send(res, 400, { error: 'base and head are required' });
-        if (!REPORT_TYPES.includes(type)) return send(res, 400, { error: 'type must be summary or full' });
-        const report = store.readReport(base, head) || buildReport({ store, baseId: base, headId: head, cfg });
-        const html = renderReport({ store, report, type, version });
-        res.writeHead(200, { 'content-type': MIME['.html'], 'content-disposition': `attachment; filename="${reportFileName(report, type)}"`, 'cache-control': 'no-store' });
-        return res.end(html);
-      }
       const handler = routes[`${req.method} ${url.pathname}`];
       if (!handler) return send(res, 404, { error: 'not found' });
       const body = req.method === 'POST' ? await readBody(req) : null;
-      send(res, 200, await handler(url.searchParams, body));
+      const out = await handler(url.searchParams, body);
+      if (out?.raw !== undefined) {
+        res.writeHead(200, { 'content-type': out.type, 'cache-control': 'no-store', ...out.headers });
+        return res.end(out.raw);
+      }
+      send(res, 200, out);
     } catch (e) {
       send(res, e.status || 500, { error: e.message });
     }
   });
 
-  // Take the next free port if the requested one is busy (e.g. another snapcrawl ui).
+  // Take the next free port if the requested one is busy (e.g. another snappcrawl ui).
   return new Promise((resolve, reject) => {
     let p = port;
     server.on('error', (e) => {

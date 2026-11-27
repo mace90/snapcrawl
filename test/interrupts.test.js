@@ -27,7 +27,7 @@ async function run(via, appOpts = {}, crawlOpts = {}, ask = async () => '') {
   const wda = via === 'wda' ? await startFakeWda({ app }) : null;
   const driver = wda ? new IosDevice({ bundleId: 'com.pulse.app', wdaUrl: wda.url, run: fakeDevicectl }) : app;
   try {
-    const atlas = await crawl({ driver, cfg, store: new Store(fs.mkdtempSync(path.join(os.tmpdir(), 'snapcrawl-'))).ensure(), io: { log: (l, m) => logs.push(`${l} ${m}`), ask: async (kind, prompt) => (asked.push(kind), ask(kind, prompt, app)) } });
+    const atlas = await crawl({ driver, cfg, store: new Store(fs.mkdtempSync(path.join(os.tmpdir(), 'snappcrawl-'))).ensure(), io: { log: (l, m) => logs.push(`${l} ${m}`), ask: async (kind, prompt) => (asked.push(kind), ask(kind, prompt, app)) } });
     assert.equal(atlas.meta.status, 'done', atlas.meta.error);
     return { atlas, app, logs, asked, calls: wda?.calls || [], names: atlas.screens.filter((s) => !s.crash).map((s) => s.name).sort() };
   } finally {
@@ -160,7 +160,7 @@ test('signature: same layout, different navigation bar title → different scree
 });
 
 test('diff: one-time screens are compared only when both runs have them', async () => {
-  const store = new Store(fs.mkdtempSync(path.join(os.tmpdir(), 'snapcrawl-')));
+  const store = new Store(fs.mkdtempSync(path.join(os.tmpdir(), 'snappcrawl-')));
   store.ensure();
   const cfg = structuredClone(DEFAULTS);
   cfg.app.bundleId = 'com.pulse.app';

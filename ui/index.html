@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>snapcrawl</title>
+<title>snappcrawl</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -101,11 +101,11 @@ pre.code{margin:10px 0 0;padding:10px 12px;border:1px solid var(--line);border-r
 .shot svg{position:absolute;inset:0;width:100%;height:100%}
 .noimg{display:grid;place-content:center;height:100%;font:11px var(--mono);color:var(--dim);text-align:center;padding:12px}
 table.kv{width:100%;border-collapse:collapse;font:12px var(--mono);margin:16px 0}
-.kv td{padding:7px 0;border-bottom:1px solid var(--line)}.kv td:first-child{color:var(--mut)}.kv td:last-child{text-align:right}
+.kv td{padding:7px 0;border-bottom:1px solid var(--line)}.kv .prog{white-space:nowrap}.kv .pb{width:80px}.kv td:first-child{color:var(--mut)}.kv td:last-child{text-align:right}
 .note{border-left:2px solid var(--line2);padding:2px 0 2px 12px;margin:0 0 16px;font-size:13px}
 .note b{display:block;font:11px var(--mono);color:var(--mut);font-weight:400;margin-bottom:2px}
 .acts{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.sec{margin-top:24px;padding-top:16px;border-top:1px solid var(--line)}
+.sec{margin-top:24px;padding-top:16px;border-top:1px solid var(--line)}.side>.sec:first-child{margin-top:0;padding-top:0;border-top:0}
 .sec h4{font:11px var(--mono);color:var(--mut);font-weight:400;margin:0 0 10px}
 .qlist{display:grid;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:6px;overflow:hidden}
 .q{display:grid;grid-template-columns:8px minmax(0,1fr) auto;gap:10px;align-items:center;min-height:40px;padding:6px 10px;border:0;background:var(--bg);cursor:pointer;text-align:left;font-size:13px}
@@ -126,21 +126,32 @@ table.kv{width:100%;border-collapse:collapse;font:12px var(--mono);margin:16px 0
 .log{margin-top:16px;height:300px;overflow:auto;border:1px solid var(--line);border-radius:6px;background:#070707;padding:10px;font:11.5px/1.7 var(--mono)}
 .ln{display:grid;grid-template-columns:52px 44px minmax(0,1fr);gap:8px}.ln .a{color:var(--dim)}.ln .b{color:var(--mut)}
 .l-AUTH .b{color:var(--new)}.l-WARN .b{color:var(--chg)}.l-ERROR .b{color:var(--bad)}.l-ERROR .c{color:#ffb4ae}.l-DONE .b{color:var(--ok)}.l-WAIT .b{color:var(--fg)}.l-STEP .c{color:var(--mut)}
+.lnk{margin-left:auto;border:0;background:none;color:var(--mut);cursor:pointer;font:11px var(--mono);padding:4px 0}.lnk:hover{color:var(--fg)}
+.st{display:grid;grid-template-columns:110px minmax(0,1fr);gap:4px 12px;font:12px var(--mono);margin:12px 0}.st dt{color:var(--mut)}.st dd{margin:0;display:flex;gap:8px;align-items:center}
+.st i{width:7px;height:7px;flex:none;background:var(--dim)}.st i.ok{background:var(--ok)}.st i.warn{background:var(--chg)}.st i.bad{background:var(--bad)}
+.panel{border:1px solid var(--line);border-radius:6px;padding:12px;margin-top:12px}.panel h3{margin:0 0 8px;font:500 12px var(--mono);color:var(--mut)}
+.joblog{margin-top:10px;max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:6px;background:#070707;padding:8px 10px;font:11px/1.6 var(--mono);color:var(--mut)}.joblog .ERROR{color:var(--bad)}.joblog .DONE{color:var(--ok)}.joblog .WAIT{color:var(--fg)}
+.fix{border-left:2px solid var(--chg);padding:2px 0 2px 10px;margin:10px 0 0;font-size:12px}.fix b{display:block;font:11px var(--mono);color:var(--chg);font-weight:400}
+.qr{display:grid;grid-template-columns:minmax(0,1fr) auto;background:var(--bg)}.qd{border:0;border-left:1px solid var(--line);background:none;color:var(--dim);cursor:pointer;font:11px var(--mono);padding:0 10px;min-height:40px}.qd:hover{color:var(--bad)}
+.confirm{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 10px;background:var(--s1);font-size:12px}.confirm span{flex:1 1 160px;color:var(--fg)}
+.settings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border-bottom:1px solid var(--line)}
+.ck{display:grid;grid-template-columns:16px 120px minmax(0,1fr);gap:4px 10px;font:12px var(--mono);padding:3px 0}.ck .v{color:var(--mut);overflow-wrap:anywhere}.ck .c{grid-column:3;color:var(--fg)}.ck-ok{color:var(--ok)}.ck-fail{color:var(--bad)}.ck-warn{color:var(--chg)}.ck-optional{color:var(--dim)}.ckg{font:11px var(--mono);color:var(--dim);margin:12px 0 4px}
+@media(max-width:900px){.settings{grid-template-columns:minmax(0,1fr)}}
 .toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:10px 14px;border-radius:6px;font:12px var(--mono);display:none;z-index:20}
 @media(max-width:900px){.work{grid-template-columns:minmax(0,1fr);height:auto}.canvas{height:60vh;min-height:380px;border-right:0;border-bottom:1px solid var(--line)}.form{grid-template-columns:minmax(0,1fr)}.blk{border-right:0}.blk:nth-last-child(2){border-bottom:1px solid var(--line)}.status{display:none}.tabs{order:3;width:100%}.tab{flex:1}}
 @media(max-width:520px){.grid3,.seg{grid-template-columns:repeat(2,minmax(0,1fr))}.mir{grid-template-columns:110px minmax(0,1fr)}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style></head><body>
 <header class="bar">
-  <span class="brand"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1" y="1" width="6" height="6" fill="#ededed"/><rect x="11" y="1" width="6" height="6" fill="none" stroke="#ededed"/><rect x="11" y="11" width="6" height="6" fill="none" stroke="#ededed"/><path d="M7 4h4M14 7v4" stroke="#5a5a5a"/></svg>snapcrawl<span class="ver" id="ver"></span></span>
-  <nav class="tabs"><button class="tab" data-v="setup">Setup</button><button class="tab" data-v="run">Run</button><button class="tab" data-v="compare">Compare</button></nav>
+  <span class="brand"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1" y="1" width="6" height="6" fill="#ededed"/><rect x="11" y="1" width="6" height="6" fill="none" stroke="#ededed"/><rect x="11" y="11" width="6" height="6" fill="none" stroke="#ededed"/><path d="M7 4h4M14 7v4" stroke="#5a5a5a"/></svg>snappcrawl<span class="ver" id="ver"></span></span>
+  <nav class="tabs"><button class="tab" data-v="setup">Setup</button><button class="tab" data-v="run">Run</button><button class="tab" data-v="compare">Compare</button><button class="tab" data-v="settings">Settings</button></nav>
   <span class="status"><span class="dot" id="sdot"></span><span id="stxt">checking…</span></span>
 </header>
 
 <section id="v-setup" class="view">
-  <div class="head"><div><h1>New crawl</h1><p class="sub">The crawler drives the simulator through idb, taps every element it finds and saves a screenshot of each screen.</p></div></div>
+  <div class="head"><div><h1>New crawl</h1><p class="sub">Pick a simulator or a USB iPhone and an app. The crawler taps every element it finds and saves a screenshot of each screen.</p></div></div>
   <div class="form">
-    <section class="blk"><h2><span>01</span>Device</h2><div id="devs" class="list"></div><div id="devmsg"></div></section>
+    <section class="blk"><h2><span>01</span>Device<button type="button" class="lnk" id="refresh">Refresh</button></h2><div id="devs" class="list"></div><div id="devmsg"></div></section>
     <section class="blk"><h2><span>02</span>App</h2>
       <label class="fl"><span>installed apps</span><select class="in" id="appsel"><option value="">loading…</option></select></label>
       <label class="fl"><span>bundle id</span><input class="in mono" id="bundle" placeholder="com.example.app" autocomplete="off" spellcheck="false"></label>
@@ -151,11 +162,13 @@ table.kv{width:100%;border-collapse:collapse;font:12px var(--mono);margin:16px 0
       <label class="fl"><span>password · sent to the local server only, never written to disk</span><input class="in" id="pass" type="password" autocomplete="off"></label>
       <div class="fl"><span>second factor</span><div class="seg" id="mfa"></div></div>
       <label class="fl" id="totpf"><span>totp secret (base32)</span><input class="in mono" id="totp" autocomplete="off" spellcheck="false"></label>
-      <label class="chk"><input type="checkbox" id="fallback" checked>If automatic login fails, pause and let me log in on the simulator</label>
+      <label class="chk"><input type="checkbox" id="fallback" checked>If automatic login fails, pause and let me log in on the device</label>
     </section>
-    <section class="blk"><h2><span>04</span>Limits</h2>
+    <section class="blk"><h2><span>04</span>Limits and interruptions</h2>
       <div class="grid3"><label class="fl"><span>max depth</span><input class="in mono" id="depth" type="number" min="1"></label><label class="fl"><span>max screens</span><input class="in mono" id="maxs" type="number" min="1"></label><label class="fl"><span>minutes</span><input class="in mono" id="mins" type="number" min="1"></label></div>
       <label class="fl"><span>blocklist · elements containing these words are never tapped</span><textarea class="in" id="block" spellcheck="false"></textarea></label>
+      <div class="grid3"><label class="fl" style="grid-column:span 2"><span>system alerts (notifications, location, tracking)</span><select class="in" id="alerts"><option value="dismiss">deny automatically</option><option value="accept">allow automatically</option><option value="pause">pause and let me answer</option></select></label></div>
+      <label class="fl"><span>dismiss · buttons that close onboarding sheets and hints (exact labels)</span><textarea class="in" id="dismiss" spellcheck="false"></textarea></label>
       <label class="chk"><input type="checkbox" id="prepare">Prepare app manually before crawl (cookie banner, onboarding, start screen)</label>
     </section>
   </div>
@@ -170,6 +183,20 @@ table.kv{width:100%;border-collapse:collapse;font:12px var(--mono);margin:16px 0
 <section id="v-compare" class="view">
   <div class="head" id="cmphead"></div>
   <div class="work"><div class="canvas" id="cmpcanvas"></div><aside class="side" id="cmpside"></aside></div>
+</section>
+<section id="v-settings" class="view">
+  <div class="head"><div><h1>Settings</h1><p class="sub">Saved in ~/.snappcrawl/config.json (mode 600) · same as snappcrawl config set</p></div></div>
+  <div class="settings">
+    <section class="blk"><h2><span>01</span>AI notes</h2>
+      <p class="hint" style="margin:0 0 14px">Optional. A model describes each change in one line; the pixel diff still decides.</p>
+      <label class="fl"><span>provider</span><select class="in" id="aiprov"><option value="none">none</option><option value="anthropic">anthropic</option><option value="openai">openai</option><option value="ollama">ollama (local)</option></select></label>
+      <label class="fl"><span>model · empty = default</span><input class="in mono" id="aimodel" autocomplete="off" spellcheck="false"></label>
+      <label class="fl"><span>api key · stored only on this Mac</span><input class="in mono" id="aikey" type="password" autocomplete="off" spellcheck="false"></label>
+      <label class="fl"><span>base url · optional, e.g. for ollama</span><input class="in mono" id="aibase" autocomplete="off" spellcheck="false"></label>
+      <div class="acts"><button class="btn pri" id="aisave">Save</button><span class="sub" id="aistate"></span></div>
+    </section>
+    <section class="blk"><h2><span>02</span>System<button type="button" class="lnk" id="ckrefresh">Refresh</button></h2><div id="checks"><p class="hint" style="margin:0">checking…</p></div></section>
+  </div>
 </section>
 <div class="toast" id="toast" role="status"></div>
 
@@ -189,6 +216,7 @@ const fmtT = (ms) => { const s = ms / 1000; return `${String(Math.floor(s / 60))
 const fmtD = (d) => (d ? new Date(d).toLocaleString(undefined, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '');
 const appOf = (r) => r.appName || r.app || '';
 const runName = (r) => `${r.label || 'run'} · ${fmtD(r.created)}`;
+const fmtEta = (ms) => (ms == null ? 'estimating' : ms < 60000 ? 'less than a minute' : `about ${Math.round(ms / 60000)} min`);
 const pct = (r) => (r == null ? '–' : (r * 100).toFixed(2) + ' %');
 
 /* ---------- graph component ---------- */
@@ -284,6 +312,7 @@ function show(v) {
   document.querySelectorAll('.view').forEach((s) => s.classList.toggle('on', s.id === 'v-' + v));
   if (v === 'compare') loadCompare();
   if (v === 'run') renderRun();
+  if (v === 'settings') loadSettings();
   history.replaceState(null, '', '#' + v);
   requestAnimationFrame(() => { const head = $('#v-' + v + ' .head'); document.documentElement.style.setProperty('--hh', (head?.offsetHeight || 0) + 'px'); });
 }
@@ -291,33 +320,81 @@ document.querySelectorAll('.tab').forEach((t) => (t.onclick = () => show(t.datas
 
 /* ---------- setup ---------- */
 async function loadDevices() {
+  $('#refresh').textContent = 'refreshing…';
   try { S.devices = await api('/api/devices'); } catch (e) { S.devices = { sims: [], tools: {}, error: e.message }; }
+  $('#refresh').textContent = 'Refresh';
   const d = S.devices, booted = d.sims.find((s) => s.state === 'Booted');
   d.usb ||= []; d.wda ||= {};
   if (!S.udid) { if (booted) S.udid = booted.udid; else if (d.usb[0]) { S.udid = d.usb[0].udid; S.dtype = 'device'; } }
-  const usb = S.dtype === 'device' && d.usb.find((x) => x.udid === S.udid);
-  $('#sdot').className = 'dot' + (usb ? (d.wda.reachable ? ' on' : ' busy') : d.tools.idb && booted ? ' on' : '');
-  $('#stxt').textContent = usb ? `${usb.name} · usb · ${d.wda.reachable ? 'WebDriverAgent ready' : 'WebDriverAgent not running'}` : !d.tools.xcrun ? 'xcrun not found' : !d.tools.idb ? 'idb not found' : booted ? `${booted.name} · booted` : 'no simulator booted';
   renderDevices();
   loadApps();
 }
+// the status in the top bar follows the selected device
+function renderStatus() {
+  const d = S.devices, booted = d.sims.find((s) => s.state === 'Booted');
+  const usb = S.dtype === 'device' && d.usb.find((x) => x.udid === S.udid);
+  const sim = S.dtype !== 'device' && d.sims.find((x) => x.udid === S.udid);
+  $('#sdot').className = 'dot' + (usb ? (d.wda.control ? ' on' : ' busy') : d.tools.idb && (sim || booted)?.state === 'Booted' ? ' on' : '');
+  $('#stxt').textContent = usb ? `${usb.name} · ${usb.lock} · ${d.wda.control ? 'WebDriverAgent ready' : d.wda.built ? 'WebDriverAgent not running' : 'WebDriverAgent not set up'}` : !d.tools.xcrun ? 'xcrun not found' : !d.tools.idb ? 'idb not found' : sim ? `${sim.name} · ${sim.state.toLowerCase()}` : booted ? `${booted.name} · booted` : 'no simulator booted';
+}
 function renderDevices() {
   const d = S.devices;
-  const usbRows = d.usb.map((u) => `<button class="row${S.udid === u.udid ? ' on' : ''}" data-udid="${esc(u.udid)}" data-type="device"><span class="r"></span><span>${esc(u.name)} <span class="tag">${u.transport === 'wired' ? 'usb' : 'wi-fi'}</span><br><small>iOS ${esc(u.ios)}${u.model && u.model !== u.name ? ' · ' + esc(u.model) : ''}</small></span><small>${!u.paired ? 'not trusted' : d.wda.reachable ? '● WDA ready' : 'WDA off'}</small></button>`);
+  renderStatus();
+  const usbRows = d.usb.map((u) => `<button class="row${S.udid === u.udid ? ' on' : ''}" data-udid="${esc(u.udid)}" data-type="device"><span class="r"></span><span>${esc(u.name)} <span class="tag">${u.transport === 'wired' ? 'usb' : 'wi-fi'}</span><br><small>iOS ${esc(u.ios)} · ${esc(u.lock)}</small></span><small>${!u.paired ? 'not trusted' : u.wda.control ? '● WDA ready' : u.wda.built ? 'WDA off' : 'WDA not set up'}</small></button>`);
   const simRows = d.sims.slice(0, 8).map((s) => `<button class="row${S.udid === s.udid ? ' on' : ''}" data-udid="${esc(s.udid)}" data-type="sim"><span class="r"></span><span>${esc(s.name)} <span class="tag">sim</span><br><small>${esc(s.runtime)}</small></span><small>${s.state === 'Booted' ? '● booted' : esc(s.state.toLowerCase())}</small></button>`);
   $('#devs').innerHTML = [...usbRows, ...simRows].join('') || '<div class="row" style="cursor:default"><span></span><span class="mono" style="color:var(--mut);font-size:12px">no simulators or iPhones found</span><span></span></div>';
   const msgs = [];
   const usb = S.dtype === 'device' && d.usb.find((x) => x.udid === S.udid);
+  const sim = S.dtype !== 'device' && d.sims.find((x) => x.udid === S.udid);
   if (d.error) msgs.push(`<p class="hint">${esc(d.error)}</p>`);
-  if (usb) {
-    if (!usb.paired) msgs.push('<p class="hint">Unlock the iPhone and tap Trust.</p>');
-    if (!d.wda.reachable) msgs.push(`<p class="hint">WebDriverAgent is not running at ${esc(d.wda.url)}. Start it in a terminal${d.wda.built ? '' : ' (build it once first)'}:</p><pre class="code">${d.wda.built ? '' : 'snapcrawl wda setup --team &lt;TEAM_ID&gt;\n'}snapcrawl wda start --udid "${esc(usb.name)}"</pre>`);
-  } else {
-    if (!d.tools.idb) msgs.push(`<pre class="code">brew tap facebook/fb && brew install idb-companion\npipx install fb-idb</pre>`);
-    if (d.tools.xcrun && !d.sims.some((s) => s.state === 'Booted')) msgs.push(`<pre class="code">xcrun simctl boot "iPhone 16" && open -a Simulator</pre>`);
+  if (usb) msgs.push(iphonePanel(usb, d.wda));
+  else {
+    if (sim && sim.state !== 'Booted') msgs.push(`<div class="acts" style="margin-top:12px"><button class="btn" data-boot="${esc(sim.udid)}">Boot ${esc(sim.name)}</button><span class="sub" style="margin:0">or let the crawl boot it</span></div>`);
+    if (!d.tools.idb) msgs.push(`<div class="fix"><b>idb is missing · needed for simulators</b>Run once in a terminal, or use snappcrawl setup:</div><pre class="code">brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion\npipx install fb-idb</pre>`);
   }
-  msgs.push('<p class="hint">Unbooted simulators are booted on start. iPhones over USB need WebDriverAgent (snapcrawl wda setup, then wda start).</p>');
   $('#devmsg').innerHTML = msgs.join('');
+  renderJob();
+}
+// What the iPhone needs, line by line, with the action for whatever is missing.
+function iphonePanel(u, w) {
+  const row = (label, cls, value) => `<dt>${label}</dt><dd><i class="${cls}"></i>${value}</dd>`;
+  const lines = [
+    row('connected', 'ok', `${u.transport === 'wired' ? 'usb' : 'wi-fi'} · iOS ${esc(u.ios)}`),
+    row('trust', u.paired ? 'ok' : 'bad', u.paired ? 'paired' : 'tap Trust on the iPhone'),
+    row('unlocked', u.lock === 'locked' ? 'warn' : u.lock === 'unlocked' ? 'ok' : '', esc(u.lock)),
+    row('developer mode', u.developerMode === 'enabled' ? 'ok' : 'bad', u.developerMode === 'enabled' ? 'on' : esc(u.developerMode)),
+    row('webdriveragent', w.control ? 'ok' : w.notAuthorized ? 'bad' : w.built ? 'warn' : 'bad', w.control ? `running · ui control ok${w.version ? ' · ' + esc(w.version) : ''}` : w.notAuthorized ? 'running · lost control (iPhone was locked)' : w.built ? 'set up · not running · starts with the crawl' : 'not set up'),
+  ];
+  const fixes = [];
+  if (!u.paired) fixes.push(['iPhone does not trust this Mac', 'Unlock it and tap Trust on "Trust This Computer?".']);
+  if (u.lock === 'locked') fixes.push(['iPhone is locked', 'Unlock it and keep it unlocked while crawling (Settings → Display & Brightness → Auto-Lock → Never).']);
+  if (u.developerMode !== 'enabled') fixes.push(['Developer Mode is off', 'iPhone: Settings → Privacy & Security → Developer Mode → on, restart, confirm. Missing switch: open Xcode → Window → Devices and Simulators once.']);
+  const busy = S.job?.running;
+  const team = esc(S.teams?.[0]?.team || w.team || '');
+  const setupForm = `<div class="grid3" style="margin-top:10px"><label class="fl" style="margin:0"><span>team id</span><input class="in mono" id="team" value="${team}" placeholder="AB12CD34EF" maxlength="10" spellcheck="false"></label><label class="fl" style="margin:0;grid-column:span 2"><span>bundle id · optional</span><input class="in mono" id="wdabundle" placeholder="generated" spellcheck="false"></label></div>
+    <p class="hint">${S.teams?.length === 1 ? 'Read from your signing certificate. ' : S.teams?.length > 1 ? `Several teams: ${S.teams.map((x) => esc(x.team)).join(', ')}. ` : 'Sign in to Xcode with your Apple ID first (Xcode → Settings → Accounts). '}Builds WebDriverAgent once, 1–3 minutes.</p>`;
+  const acts = !w.built
+    ? `<button class="btn pri" data-wda="setup"${busy ? ' disabled' : ''}>Set up WebDriverAgent</button>`
+    : `${w.running || w.reachable ? `<button class="btn" data-wda="stop"${busy ? ' disabled' : ''}>Stop</button>` : ''}<button class="btn${w.control ? '' : ' pri'}" data-wda="start"${busy ? ' disabled' : ''}>${w.running || w.notAuthorized ? 'Restart' : 'Start'}</button><button class="btn" data-wda="setup"${busy ? ' disabled' : ''}>Set up again</button>`;
+  return `<div class="panel"><h3>iphone</h3><dl class="st">${lines.join('')}</dl>${fixes.map(([b, t]) => `<div class="fix"><b>${esc(b)}</b>${esc(t)}</div>`).join('')}
+    ${!w.built ? setupForm : ''}<div class="acts" style="margin-top:12px">${acts}</div><div id="job"></div></div>`;
+}
+function renderJob() {
+  const host = $('#job'); if (!host) return;
+  const J = S.job; if (!J || (!J.running && !J.log?.length)) { host.innerHTML = ''; return; }
+  const hint = !J.running && J.ok === false ? `<div class="fix"><b>${esc(J.error || 'failed')}</b>${(J.hints || []).map(esc).join('<br>')}</div>` : '';
+  host.innerHTML = `${hint}<div class="joblog" id="joblog">${J.log.map((l) => `<div class="${l.level}">${esc(l.msg)}</div>`).join('')}${J.running ? '<div>…</div>' : ''}</div>`;
+  const lg = $('#joblog'); lg.scrollTop = lg.scrollHeight;
+}
+async function wdaAction(kind) {
+  const usb = S.devices?.usb?.find((x) => x.udid === S.udid);
+  try {
+    if (kind === 'stop') { await api('/api/wda/stop', {}); toast('WebDriverAgent stopped'); return loadDevices(); }
+    const body = { udid: usb?.udid };
+    if (kind === 'setup') { body.team = ($('#team')?.value || S.teams?.[0]?.team || S.devices?.wda?.team || '').trim().toUpperCase(); body.bundleId = $('#wdabundle')?.value.trim() || undefined; }
+    S.job = { kind, running: true, log: [] }; renderDevices();
+    await api('/api/wda/' + kind, body);
+  } catch (e) { S.job = { kind, running: false, ok: false, error: e.message, log: [] }; renderDevices(); }
 }
 async function loadApps() {
   const sel = $('#appsel');
@@ -336,7 +413,7 @@ function renderMfa() {
 }
 function renderCli() {
   const sim = S.devices?.sims.find((s) => s.udid === S.udid), usb = S.devices?.usb?.find((s) => s.udid === S.udid);
-  const parts = ['snapcrawl crawl', `--bundle <b>${esc($('#bundle').value || '<bundle-id>')}</b>`];
+  const parts = ['snappcrawl crawl', `--bundle <b>${esc($('#bundle').value || '<bundle-id>')}</b>`];
   if (S.dtype === 'device' && usb) parts.push(`--device "${esc(usb.name)}"`);
   else if (sim) parts.push(`--udid "${esc(sim.name)}"`);
   if (S.mfa !== 'none') parts.push(`--mfa ${S.mfa}`);
@@ -352,18 +429,23 @@ function fillSetup() {
   const c = S.state.config;
   $('#bundle').value ||= c.bundleId || '';
   $('#user').value ||= c.username || '';
-  $('#pass').placeholder = c.hasPassword ? 'from config / SNAPCRAWL_PASSWORD' : '';
-  $('#totp').placeholder = c.hasTotp ? 'from config / SNAPCRAWL_TOTP_SECRET' : 'JBSWY3DPEHPK3PXP';
+  $('#pass').placeholder = c.hasPassword ? 'from config / SNAPPCRAWL_PASSWORD' : '';
+  $('#totp').placeholder = c.hasTotp ? 'from config / SNAPPCRAWL_TOTP_SECRET' : 'JBSWY3DPEHPK3PXP';
   S.mfa = c.mfa || 'none';
   $('#fallback').checked = c.fallbackManual !== false;
   $('#depth').value = c.crawl.maxDepth; $('#maxs').value = c.crawl.maxScreens; $('#mins').value = c.crawl.timeLimitMin;
   $('#block').value = c.crawl.blocklist.join(', ');
   $('#prepare').checked = !!c.crawl.prepare;
+  $('#alerts').value = c.crawl.systemAlerts || 'dismiss';
+  $('#dismiss').value = (c.crawl.dismiss || []).join(', ');
   renderMfa();
 }
 $('#v-setup').addEventListener('click', (e) => {
   const b = e.target.closest('button'); if (!b) return;
-  if (b.dataset.udid) { S.udid = b.dataset.udid; S.dtype = b.dataset.type || 'sim'; loadDevices(); renderCli(); }
+  if (b.dataset.udid) { S.udid = b.dataset.udid; S.dtype = b.dataset.type || 'sim'; renderDevices(); loadApps(); renderCli(); }
+  if (b.id === 'refresh') loadDevices();
+  if (b.dataset.wda) wdaAction(b.dataset.wda);
+  if (b.dataset.boot) { b.disabled = true; b.textContent = 'booting…'; api('/api/boot', { udid: b.dataset.boot }).then(() => { toast('simulator booted'); loadDevices(); }, (e) => { toast(e.message); loadDevices(); }); }
   if (b.dataset.mfa) { S.mfa = b.dataset.mfa; renderMfa(); }
 });
 $('#v-setup').addEventListener('input', renderCli);
@@ -372,7 +454,7 @@ $('#start').onclick = async () => {
   const body = {
     udid: S.udid, platform: S.dtype === 'device' ? 'ios-device' : 'ios-sim', bundleId: $('#bundle').value.trim(), label: $('#label').value.trim(),
     auth: { username: $('#user').value, password: $('#pass').value, mfa: S.mfa, totpSecret: $('#totp').value.trim(), fallbackManual: $('#fallback').checked },
-    crawl: { maxDepth: +$('#depth').value || undefined, maxScreens: +$('#maxs').value || undefined, timeLimitMin: +$('#mins').value || undefined, blocklist: $('#block').value.split(',').map((s) => s.trim()).filter(Boolean), prepare: $('#prepare').checked },
+    crawl: { maxDepth: +$('#depth').value || undefined, maxScreens: +$('#maxs').value || undefined, timeLimitMin: +$('#mins').value || undefined, blocklist: $('#block').value.split(',').map((s) => s.trim()).filter(Boolean), prepare: $('#prepare').checked, systemAlerts: $('#alerts').value, dismiss: $('#dismiss').value.split(',').map((s) => s.trim()).filter(Boolean) },
   };
   try { await api('/api/crawl', body); S.live = { id: null, atlas: null, log: [], logRun: null, ask: null, running: true }; runGraph.fitted = false; show('run'); }
   catch (e) { toast(e.message); }
@@ -387,7 +469,9 @@ function runList() {
   if (!runs.length) return '';
   const B = S.state.baselines || {};
   const apps = [...new Set(runs.map((r) => r.app))];
-  return `<div class="sec"><h4>runs</h4>${apps.map((app) => { const rs = runs.filter((r) => r.app === app); return `<p class="sub" style="margin:12px 0 6px">${esc(appOf(rs[0]))}</p><div class="qlist">${rs.map((r) => `<button class="q${r.id === S.live.id ? ' on' : ''}" data-open="${esc(r.id)}"><i class="${B[app] === r.id ? 'base' : 'plain'}"></i><span>${esc(r.label || 'run')}${B[app] === r.id ? ' <small>baseline</small>' : ''}</span><small>${fmtD(r.created)} · ${r.screens}${r.status !== 'done' ? ' · ' + esc(r.status) : ''}</small></button>`).join('')}</div>`; }).join('')}</div>`;
+  return `<div class="sec"><h4>runs</h4>${apps.map((app) => { const rs = runs.filter((r) => r.app === app); return `<p class="sub" style="margin:12px 0 6px">${esc(appOf(rs[0]))}</p><div class="qlist">${rs.map((r) => S.del === r.id
+    ? `<div class="confirm"><span>Delete ${esc(r.label || r.id)}${B[app] === r.id ? ' (the baseline)' : ''} and its comparisons?</span><button class="btn r" data-delok="${esc(r.id)}">Delete</button><button class="btn" data-delno="1">Cancel</button></div>`
+    : `<div class="qr"><button class="q${r.id === S.live.id ? ' on' : ''}" data-open="${esc(r.id)}"><i class="${B[app] === r.id ? 'base' : 'plain'}"></i><span>${esc(r.label || 'run')}${B[app] === r.id ? ' <small>baseline</small>' : ''}</span><small>${fmtD(r.created)} · ${r.screens}${r.status !== 'done' ? ' · ' + esc(r.status) : ''}</small></button><button class="qd" data-del="${esc(r.id)}" aria-label="Delete run ${esc(r.label || r.id)}">Delete</button></div>`).join('')}</div>`; }).join('')}</div>`;
 }
 function renderRun() {
   const L = S.live, a = L.atlas, head = $('#runhead'), side = $('#runside');
@@ -405,7 +489,8 @@ function renderRun() {
   let acts = '';
   if (L.running) acts = '<button class="btn" data-run="stop">Stop</button>';
   else if (a && !errored) acts = isBase ? `<span class="tag t-same">baseline</span>` : `${baseId ? '<button class="btn pri" data-run="compare">Compare with baseline</button>' : ''}<button class="btn" data-run="baseline">Make baseline</button>`;
-  head.innerHTML = `<div><h1>${title}</h1><p class="sub">${a ? `${esc(a.meta.app)} · ` : ''}${n} screens · ${a?.edges.length || 0} transitions · ${x} crashes${a?.meta.device ? ' · ' + esc(a.meta.device.name) : ''}${a && !L.running ? ' · ' + fmtD(a.meta.created) : ''}</p></div><div class="acts">${acts}</div>`;
+  const est = L.running && L.progress ? ` · ${L.progress.pct} % · ${esc(fmtEta(L.progress.etaMs))} left` : '';
+  head.innerHTML = `<div><h1>${title}${est ? `<span class="sub" style="margin-left:12px;font-size:13px">${est.slice(3)}</span>` : ''}</h1><p class="sub">${a ? `${esc(a.meta.app)} · ` : ''}${n} screens · ${a?.edges.length || 0} transitions · ${x} crashes${a?.meta.device ? ' · ' + esc(a.meta.device.name) : ''}${a && !L.running ? ' · ' + fmtD(a.meta.created) : ''}</p></div><div class="acts">${acts}</div>`;
   let mirror = '<div class="frame"><div class="noimg">waiting</div></div>';
   if (a) {
     const last = [...a.screens].reverse().find((s) => s.screenshot);
@@ -420,7 +505,10 @@ function renderRun() {
   const showLog = L.log.length && (L.running || L.logRun === a?.meta.id);
   const t0 = L.log[0]?.t || Date.now();
   const elapsed = a?.meta.durationMs ?? (L.log.at(-1)?.t || t0) - t0;
-  side.innerHTML = `${ask}<div class="mir">${mirror}<table class="kv"><tr><td>run</td><td>${esc(L.id || '…')}</td></tr><tr><td>screens</td><td>${n}</td></tr><tr><td>transitions</td><td>${a?.edges.length || 0}</td></tr><tr><td>crashes</td><td>${x}</td></tr><tr><td>duration</td><td>${fmtT(elapsed)}</td></tr></table></div>
+  // estimated progress: taps tried of taps known so far, bounded by the screen and time limits
+  const P = (L.running ? L.progress : null) || a?.meta.progress;
+  const progRows = P ? `<tr><td>progress</td><td><span class="prog" style="justify-content:flex-end"><span class="pb"><i style="width:${P.pct}%"></i></span>${P.pct} %</span></td></tr><tr><td>${L.running ? 'time left' : 'taps tried'}</td><td>${L.running ? esc(fmtEta(P.etaMs)) + (P.bound === 'screens' ? ' · screen limit' : P.bound === 'time' ? ' · time limit' : '') : `${P.done}/${P.total}`}</td></tr>` : '';
+  side.innerHTML = `${ask}<div class="mir">${mirror}<table class="kv"><tr><td>run</td><td>${esc(L.id || '…')}</td></tr><tr><td>screens</td><td>${n}</td></tr><tr><td>transitions</td><td>${a?.edges.length || 0}</td></tr><tr><td>crashes</td><td>${x}</td></tr><tr><td>duration</td><td>${fmtT(elapsed)}</td></tr>${progRows}</table></div>
     ${showLog ? `<div class="log" id="log">${L.log.map((l) => `<div class="ln l-${l.level}"><span class="a">${fmtT(l.t - t0)}</span><span class="b">${l.level}</span><span class="c">${esc(l.msg)}</span></div>`).join('')}</div>` : ''}
     ${L.running ? '' : runList()}`;
   const lg = $('#log'); if (lg) lg.scrollTop = lg.scrollHeight;
@@ -443,6 +531,14 @@ document.body.addEventListener('click', (e) => {
 });
 $('#v-run').addEventListener('click', async (e) => {
   const o = e.target.closest('[data-open]'); if (o) return openRun(o.dataset.open);
+  const del = e.target.closest('[data-del],[data-delok],[data-delno]');
+  if (del?.dataset.del) { S.del = del.dataset.del; return renderRun(); }
+  if (del?.dataset.delno) { S.del = null; return renderRun(); }
+  if (del?.dataset.delok) {
+    try { await api('/api/runs/delete', { id: del.dataset.delok }); toast('run deleted'); if (S.live.id === del.dataset.delok) S.live = { ...S.live, id: null, atlas: null }; }
+    catch (err) { toast(err.message); }
+    S.del = null; await loadState(); return renderRun();
+  }
   const b = e.target.closest('[data-run]'); if (!b) return;
   const k = b.dataset.run, a = S.live.atlas;
   if (k === 'stop') { await api('/api/stop', {}); toast('stopping after the current step'); }
@@ -460,6 +556,9 @@ es.addEventListener('ask', (e) => { S.live.ask = JSON.parse(e.data); if (S.view 
 es.addEventListener('answered', () => { S.live.ask = null; if (S.view === 'run') renderRun(); });
 es.addEventListener('done', () => { refreshAtlas(); });
 es.addEventListener('state', async (e) => { if (!JSON.parse(e.data).running) { S.live.running = false; S.live.ask = null; await loadState(); refreshAtlas(); if (S.view === 'run') renderRun(); } });
+es.addEventListener('job', (e) => { const l = JSON.parse(e.data); S.job ||= { kind: l.kind, running: true, log: [] }; S.job.running = true; S.job.log.push(l); renderJob(); });
+es.addEventListener('job-done', (e) => { const d = JSON.parse(e.data); S.job = { ...(S.job || { log: [] }), ...d, running: false }; toast(d.ok ? `WebDriverAgent ${d.kind} done` : `WebDriverAgent ${d.kind} failed`); loadDevices(); });
+es.addEventListener('progress', (e) => { S.live.progress = JSON.parse(e.data); if (S.view === 'run') renderRun(); });
 es.addEventListener('notes', (e) => { const { n, total } = JSON.parse(e.data); toast(`notes ${n}/${total}`); });
 
 /* ---------- compare ---------- */
@@ -474,7 +573,7 @@ async function loadCompare() {
   if (!headRun || !C.base) {
     const why = headRun ? `Only one run of ${esc(appOf(headRun))}. Crawl the same app again after the next build.` : P.error ? esc(P.error) : 'Crawl the same app again after the next build. The first run of an app is its baseline.';
     $('#cmphead').innerHTML = `<div><h1>Nothing to compare yet</h1><p class="sub">${why}</p></div><button class="btn pri" data-go="setup">New crawl</button>`;
-    $('#cmpside').innerHTML = '<p class="hint" style="margin-top:0">Try it with sample data:</p><pre class="code">snapcrawl demo\nsnapcrawl ui</pre>';
+    $('#cmpside').innerHTML = '<p class="hint" style="margin-top:0">Try it with sample data:</p><pre class="code">snappcrawl demo\nsnappcrawl ui</pre>';
     cmpGraph.empty('<p>Compare needs two runs of the same app.</p>');
     return;
   }
@@ -556,6 +655,39 @@ $('#v-compare').addEventListener('change', (e) => {
   if (c === 'base' || c === 'head') { S.cmp[c] = e.target.value; if (c === 'head') S.cmp.base = ''; S.cmp.sel = null; S.cmp.report = null; loadCompare(); }
 });
 
+/* ---------- settings ---------- */
+async function loadSettings() {
+  try {
+    const { settings, ai } = await api('/api/config');
+    $('#aiprov').value = settings.ai?.provider || ai.provider || 'none';
+    $('#aimodel').value = settings.ai?.model || '';
+    $('#aikey').value = ''; $('#aikey').placeholder = settings.ai?.apiKey ? `saved · ${settings.ai.apiKey}` : 'not set · or ANTHROPIC_API_KEY / OPENAI_API_KEY';
+    $('#aibase').value = settings.ai?.baseUrl || '';
+    $('#aistate').textContent = ai.ready ? `active · ${ai.provider} · ${ai.model}` : 'off';
+  } catch (e) { toast(e.message); }
+  loadChecks();
+}
+async function loadChecks() {
+  $('#checks').innerHTML = '<p class="hint" style="margin:0">checking…</p>';
+  try {
+    const { checks } = await api('/api/doctor');
+    const mark = { ok: '✓', fail: '✗', warn: '!', optional: '○' };
+    const groups = [...new Set(checks.map((c) => c.group))];
+    $('#checks').innerHTML = groups.map((g) => `<p class="ckg">${g}</p>` + checks.filter((c) => c.group === g).map((c) => `<div class="ck"><span class="ck-${c.state}">${mark[c.state]}</span><span>${esc(c.label)}</span><span class="v">${esc(c.value || '')}</span>${(c.state === 'fail' || c.state === 'warn') && c.fix ? `<span class="c">${c.fix.cmd ? esc(c.fix.cmd) + (c.fix.sudo ? ' (run it yourself)' : '') : esc((c.fix.steps || []).join(' '))}</span>` : ''}</div>`).join('')).join('');
+  } catch (e) { $('#checks').innerHTML = `<p class="hint">${esc(e.message)}</p>`; }
+}
+$('#ckrefresh').onclick = loadChecks;
+$('#aisave').onclick = async () => {
+  const set = (key, value) => api('/api/config', { key, value });
+  try {
+    await set('ai.provider', $('#aiprov').value);
+    await set('ai.model', $('#aimodel').value.trim());
+    await set('ai.baseUrl', $('#aibase').value.trim());
+    if ($('#aikey').value) await set('ai.apiKey', $('#aikey').value.trim());
+    toast('settings saved'); await loadState(); loadSettings();
+  } catch (e) { toast(e.message); }
+};
+
 /* ---------- boot ---------- */
 async function loadState() {
   S.state = await api('/api/state');
@@ -563,12 +695,14 @@ async function loadState() {
   if (S.state.live.running) { S.live.running = true; S.live.id = S.state.live.runId; S.live.logRun = S.live.id; S.live.ask = S.state.live.ask; if (!S.live.log.length) { try { S.live.log = (await api('/api/log')).log; } catch {} } refreshAtlas(); }
 }
 (async () => {
-  try { await loadState(); } catch (e) { document.body.insertAdjacentHTML('beforeend', `<p class="hint" style="padding:20px">Cannot reach the snapcrawl server: ${esc(e.message)}</p>`); return; }
+  try { await loadState(); } catch (e) { document.body.insertAdjacentHTML('beforeend', `<p class="hint" style="padding:20px">Cannot reach the snappcrawl server: ${esc(e.message)}</p>`); return; }
   fillSetup();
   const want = location.hash.slice(1);
   const comparable = !!S.state.pair?.head;
-  show(['setup', 'run', 'compare'].includes(want) ? want : S.state.live.running ? 'run' : comparable ? 'compare' : 'setup');
+  show(['setup', 'run', 'compare', 'settings'].includes(want) ? want : S.state.live.running ? 'run' : comparable ? 'compare' : 'setup');
   loadDevices();
+  api('/api/wda/teams').then((r) => { S.teams = r.teams; if (S.dtype === 'device') renderDevices(); }, () => {});
+  api('/api/job').then((j) => { if (j.kind) { S.job = j; renderJob(); } }, () => {});
 })();
 }
 </script>
