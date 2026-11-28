@@ -14,6 +14,9 @@ const wordy = (t) => {
 };
 const bucket = (n) => (n <= 3 ? String(n) : n <= 7 ? '4-7' : n <= 15 ? '8-15' : '16+');
 
+// the tabs of a tab bar, left to right (only elements a driver marked as tabs)
+export const tabsOf = (els) => els.filter((e) => e.tab).sort((a, b) => a.x - b.x);
+
 export const titleOf = (els) => {
   const nav = els.find((e) => !e.web && /navigationbar/i.test(e.type) && (e.label || e.id));
   return nav ? norm(nav.label || nav.id) : '';
@@ -21,7 +24,11 @@ export const titleOf = (els) => {
 
 export function signature(els) {
   const own = els.filter((e) => !e.web);
-  const tab = own.find((e) => e.tab && e.selected && e.label);
+  // Tabs count by their place, not their label: iOS 26 names a tab after its symbol in some
+  // reads (house) and after its title in others (Start). The selected one: by place too.
+  const tabs = tabsOf(own);
+  const selected = tabs.findIndex((e) => e.selected);
+  const tab = selected >= 0 ? { label: `#${selected + 1}` } : null;
   const cells = own.filter((e) => /^cell$/i.test(e.type) && e.w > 0 && e.h > 0);
   // inside a list cell: from the tree (WDA) or, without one (simulator), from the frames
   const inCell = (e) => e.cell || cells.some((c) => c !== e && e.x >= c.x - 0.5 && e.y >= c.y - 0.5 && e.x + e.w <= c.x + c.w + 0.5 && e.y + e.h <= c.y + c.h + 0.5);
@@ -37,6 +44,10 @@ export function signature(els) {
     const type = String(e.type);
     counts[type] = (counts[type] || 0) + 1;
     if (/navigationbar/i.test(type) || CONTAINER.test(type)) continue;
+    if (e.tab) {
+      add(`Tab:#${tabs.indexOf(e) + 1}`, 1);
+      continue;
+    }
     const id = e.id && !UUID.test(e.id) ? e.id : '';
     const key = id || norm(e.label);
     if (/^cell$/i.test(type)) {

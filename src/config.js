@@ -17,6 +17,7 @@ export const DEFAULTS = {
     password: '',
     mfa: 'none', // none | totp | prompt | manual
     totpSecret: '',
+    pin: '', // a PIN the app asks for (4, 6, 8 digits …): tapped on its number pad or typed
     fallbackManual: true,
   },
   crawl: {
@@ -30,6 +31,12 @@ export const DEFAULTS = {
     webLinks: 'skip', // skip | tap  links in web content usually leave the app
     systemAlerts: 'dismiss', // dismiss | accept | pause  permission prompts (notifications, location, tracking)
     dismiss: DEFAULT_DISMISS, // buttons that close onboarding sheets and hints
+    follow: true, // with a baseline: its screens first, in its order, a tap that lands elsewhere tried once more
+    intro: '', // keep | skip | fresh · screens an app shows only on its first start; empty: like the baseline, else keep
+    reinstall: '', // with intro fresh: a .app to uninstall and install before each run
+    prefer: [], // labels tapped before everything else, e.g. ["Konto", "Einstellungen"]
+    maxPerList: 0, // only the first n cells of each list (0 = all)
+    against: '', // bundle id of another app whose baseline this run is compared with (a second build)
     blocklist: [
       'log out', 'logout', 'sign out', 'abmelden',
       'delete account', 'konto löschen',
@@ -37,9 +44,11 @@ export const DEFAULTS = {
     ],
   },
   diff: {
-    threshold: 0.1, // per-pixel color tolerance (pixelmatch)
+    threshold: 0.05, // per-pixel color tolerance (pixelmatch); 0.1 misses a white card on the light gray iOS background
     minChangedRatio: 0.0005, // below this share of changed pixels a screen counts as unchanged
     ignoreStatusBar: true,
+    ignoreHomeIndicator: true, // the bar at the bottom, tinted by iOS after the screen before
+    ignore: [], // areas left out of the comparison: { screen: "Aktionstaste", x, y, w, h } in points
   },
   ai: {
     provider: 'none', // none | anthropic | openai | ollama
@@ -89,6 +98,7 @@ export function loadConfig(file) {
   cfg.auth.username ||= env('USERNAME') || '';
   cfg.auth.password ||= env('PASSWORD') || '';
   cfg.auth.totpSecret ||= env('TOTP_SECRET') || '';
+  cfg.auth.pin = String(cfg.auth.pin || env('PIN') || ''); // a string: "0815" keeps its zero
   if (!cfg.ai.apiKey) {
     if (cfg.ai.provider === 'anthropic') cfg.ai.apiKey = process.env.ANTHROPIC_API_KEY || '';
     if (cfg.ai.provider === 'openai') cfg.ai.apiKey = process.env.OPENAI_API_KEY || '';
@@ -104,13 +114,17 @@ export function getGlobal() {
   return readJson(globalFile()) || {};
 }
 
+// settings that hold a list: `config set crawl.prefer "Konto, Einstellungen"`
+const LIST_KEYS = ['crawl.prefer', 'crawl.blocklist', 'crawl.dismiss'];
+
 export function setGlobal(key, value) {
   const data = getGlobal();
   const parts = key.split('.');
   let node = data;
   for (const p of parts.slice(0, -1)) node = node[p] = node[p] && typeof node[p] === 'object' ? node[p] : {};
   let v = value;
-  if (v === 'true' || v === 'false') v = v === 'true';
+  if (LIST_KEYS.includes(key)) v = Array.isArray(v) ? v : String(v).split(',').map((x) => x.trim()).filter(Boolean);
+  else if (v === 'true' || v === 'false') v = v === 'true';
   else if (v !== '' && !Number.isNaN(Number(v))) v = Number(v);
   node[parts.at(-1)] = v;
   fs.mkdirSync(path.dirname(GLOBAL_FILE), { recursive: true });
@@ -127,8 +141,9 @@ export const TEMPLATE = {
     password: 'env:SNAPPCRAWL_PASSWORD',
     mfa: 'none',
     totpSecret: 'env:SNAPPCRAWL_TOTP_SECRET',
+    pin: 'env:SNAPPCRAWL_PIN',
     fallbackManual: true,
   },
   crawl: { maxDepth: 8, maxScreens: 200, timeLimitMin: 20, blocklist: DEFAULTS.crawl.blocklist },
-  diff: { threshold: 0.1, minChangedRatio: 0.0005, ignoreStatusBar: true },
+  diff: { threshold: 0.05, minChangedRatio: 0.0005, ignoreStatusBar: true },
 };

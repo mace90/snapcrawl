@@ -1,0 +1,185 @@
+name: snappcrawl check
+description: 'Crawl your iOS app in the Simulator and compare every screen with the base branch. Screenshots, texts, buttons, navigation, crashes.'
+author: snappcrawl
+branding:
+  icon: smartphone
+  color: gray-dark
+
+inputs:
+  working-directory:
+    description: 'Folder with the Xcode project or workspace'
+    default: .
+  project:
+    description: '.xcodeproj or .xcworkspace (default: the only one in working-directory)'
+    default: ''
+  scheme:
+    description: 'Scheme to build (default: the only one, or the one named like the project)'
+    default: ''
+  configuration:
+    description: 'Build configuration'
+    default: Debug
+  build-settings:
+    description: 'Extra build settings, one KEY=VALUE per line'
+    default: ''
+  base-ref:
+    description: 'Git state to compare with; it is built and crawled first as the baseline (default the pull request''s base, else HEAD~1)'
+    default: ''
+  simulator:
+    description: 'Simulator name (default the newest available iPhone)'
+    default: ''
+  max-screens:
+    description: 'Stop after this many screens'
+    default: '40'
+  max-depth:
+    description: 'Taps away from the start screen'
+    default: '4'
+  minutes:
+    description: 'Time limit per crawl'
+    default: '10'
+  fail-on:
+    description: 'When the step fails: broken (a new crash or unreachable screen), changes (any open change), never'
+    default: broken
+  comment:
+    description: 'Post the result as a pull request comment (needs pull-requests write permission)'
+    default: 'true'
+  node-version:
+    description: 'Node.js for snappcrawl'
+    default: '22'
+
+outputs:
+  verdict:
+    description: 'passed | changes | broken | failed | input | error'
+    value: ${{ steps.check.outputs.verdict }}
+  report:
+    description: 'Path of the full HTML report'
+    value: ${{ steps.check.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Install idb and snappcrawl
+      shell: bash
+      run: |
+        brew tap facebook/fb >/dev/null
+        brew trust facebook/fb >/dev/null 2>&1 || true   # newer Homebrew refuses untrusted taps
+        if ! brew install idb-companion >/dev/null; then
+          # it compiles with Xcode 26: select an installed one when an older Xcode is active
+          x=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$x" ] || { echo "::error::idb-companion needs Xcode 26 · use runs-on: macos-26"; exit 1; }
+          echo "selecting $x for idb-companion"
+          sudo xcode-select -s "$x/Contents/Developer"
+          brew install idb-companion >/dev/null
+        fi
+        command -v pipx >/dev/null || brew install pipx >/dev/null
+        pipx install fb-idb >/dev/null
+        export PATH="$HOME/.local/bin:$PATH"
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        command -v idb_companion >/dev/null && command -v idb >/dev/null || { echo "::error::idb did not install"; exit 1; }
+        # a packed copy installs its dependencies (installing the folder would only link it)
+        tgz=$(cd "${{ github.action_path }}" && npm pack --silent --pack-destination "$RUNNER_TEMP" | tail -1)
+        npm install --global "$RUNNER_TEMP/$tgz" >/dev/null
+        echo "snappcrawl $(snappcrawl --version) · $(idb --help >/dev/null 2>&1 && echo idb ok)"
+
+    - name: Boot a simulator
+      id: sim
+      shell: bash
+      run: |
+        name="${{ inputs.simulator }}"
+        if [ -z "$name" ]; then
+          name=$(xcrun simctl list devices available -j | node -e '
+            const d = JSON.parse(require("fs").readFileSync(0, "utf8")).devices;
+            const ios = Object.keys(d).filter((r) => /iOS/.test(r)).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+            for (const r of ios) { const p = d[r].find((x) => /^iPhone/.test(x.name)); if (p) { console.log(p.name); break; } }')
+        fi
+        echo "simulator: $name"
+        snappcrawl boot "$name"
+        echo "name=$name" >> "$GITHUB_OUTPUT"
+
+    - name: Crawl the base and this change, compare
+      id: check
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        CI: 'true'
+        BASE_REF: ${{ inputs.base-ref || github.event.pull_request.base.sha }}
+      run: |
+        base="${BASE_REF:-HEAD~1}"
+        git cat-file -e "$base^{commit}" 2>/dev/null || git fetch --no-tags --depth=50 origin "$base" || true
+        # the app does not exist in the base yet (its first pull request): crawl this change only,
+        # as the baseline
+        here="$(git rev-parse --show-prefix)"
+        if git cat-file -e "$base^{commit}" 2>/dev/null && [ -n "$(git ls-tree --name-only "$base" -- "${here:-./}" | grep -E '\.xc(odeproj|workspace)$' || true)" ]; then
+          baseargs=(--base-ref "$base")
+        elif git cat-file -e "$base^{commit}" 2>/dev/null && [ -z "$here" ] && git ls-tree --name-only "$base" | grep -qE '\.xc(odeproj|workspace)$'; then
+          baseargs=(--base-ref "$base")
+        else
+          echo "::notice::no Xcode project in ${base::8} at ${here:-the root} · crawling this change only, as the baseline"
+          baseargs=()
+        fi
+        args=(check --build "${baseargs[@]}" --udid "${{ steps.sim.outputs.name }}" --max-screens "${{ inputs.max-screens }}" --max-depth "${{ inputs.max-depth }}" --minutes "${{ inputs.minutes }}" --configuration "${{ inputs.configuration }}" --label "${GITHUB_SHA::8}" --json --junit snappcrawl-junit.xml)
+        [ -n "${{ inputs.project }}" ] && args+=(--project "${{ inputs.project }}")
+        [ -n "${{ inputs.scheme }}" ] && args+=(--scheme "${{ inputs.scheme }}")
+        while IFS= read -r s; do [ -n "$s" ] && args+=(--set "$s"); done <<< "${{ inputs.build-settings }}"
+        set +e
+        snappcrawl "${args[@]}" > snappcrawl-result.json
+        code=$?
+        set -e
+        verdict=$(node -e 'try { console.log(JSON.parse(require("fs").readFileSync("snappcrawl-result.json", "utf8")).verdict) } catch { console.log("error") }')
+        echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+        echo "code=$code" >> "$GITHUB_OUTPUT"
+        if [ "$verdict" = "baseline" ]; then
+          node -e 'const r = JSON.parse(require("fs").readFileSync("snappcrawl-result.json", "utf8")); console.log(`### snappcrawl · ${r.app} · baseline\n\nNothing to compare with yet: the base has no build of the app. This change was crawled and saved as the baseline: ${r.screens} screens${r.crashes ? `, ${r.crashes} crash${r.crashes > 1 ? "es" : ""}` : ", no crash"}.`)' > snappcrawl-summary.md
+          snappcrawl report --full --out snappcrawl-report.html >/dev/null 2>&1 || true
+        elif [ "$verdict" != "error" ] && [ "$verdict" != "input" ]; then
+          snappcrawl diff --markdown > snappcrawl-summary.md || true
+          snappcrawl report --full --out snappcrawl-report.html >/dev/null || true
+          echo "report=$PWD/snappcrawl-report.html" >> "$GITHUB_OUTPUT"
+        else
+          node -e 'const r = JSON.parse(require("fs").readFileSync("snappcrawl-result.json", "utf8")); console.log(`### snappcrawl · ${r.verdict}\n\n${r.error || ""}`)' > snappcrawl-summary.md || echo "### snappcrawl · error" > snappcrawl-summary.md
+        fi
+
+    - name: Upload the report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: snappcrawl-${{ github.run_id }}
+        path: |
+          ${{ inputs.working-directory }}/snappcrawl-report.html
+          ${{ inputs.working-directory }}/snappcrawl-result.json
+          ${{ inputs.working-directory }}/snappcrawl-junit.xml
+        if-no-files-found: ignore
+
+    - name: Comment on the pull request
+      if: always() && inputs.comment == 'true' && github.event.pull_request.number
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        [ -f snappcrawl-summary.md ] || exit 0
+        printf '\n\nFull report with every screen: artifact `snappcrawl-%s` of [this run](%s/%s/actions/runs/%s).\n' "${{ github.run_id }}" "${{ github.server_url }}" "${{ github.repository }}" "${{ github.run_id }}" >> snappcrawl-summary.md
+        printf '\n<!-- snappcrawl -->\n' >> snappcrawl-summary.md
+        pr="${{ github.event.pull_request.number }}"
+        # one comment per pull request, updated on every push
+        id=$(gh api "repos/${{ github.repository }}/issues/$pr/comments" --paginate --jq '.[] | select(.body | contains("<!-- snappcrawl -->")) | .id' 2>/dev/null | tail -1)
+        if [ -n "$id" ]; then
+          gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$id" -F body=@snappcrawl-summary.md >/dev/null
+        else
+          gh pr comment "$pr" --body-file snappcrawl-summary.md >/dev/null
+        fi || echo "::warning::could not comment (the workflow needs permissions: pull-requests: write)"
+
+    - name: Result
+      shell: bash
+      run: |
+        v="${{ steps.check.outputs.verdict }}"
+        echo "snappcrawl: $v"
+        case "${{ inputs.fail-on }}:$v" in
+          never:*) exit 0 ;;
+          *:error|*:input) echo "::error::snappcrawl could not check the app ($v), see the log"; exit 1 ;;
+          broken:broken|broken:failed|changes:broken|changes:failed) echo "::error::snappcrawl: $v"; exit 1 ;;
+          changes:changes) echo "::error::snappcrawl: changes to review"; exit 1 ;;
+        esac

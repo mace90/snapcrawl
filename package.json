@@ -1,11 +1,22 @@
 {
   "name": "snappcrawl",
-  "version": "0.3.0",
-  "description": "Crawl your iOS app, map every screen as a graph, and catch visual regressions between builds.",
+  "version": "0.4.0",
+  "description": "Crawl your iOS app in the Simulator, map every screen and catch regressions between builds. CLI, web UI, MCP server for coding agents, GitHub Action.",
+  "mcpName": "io.github.mace90/snappcrawl",
   "type": "module",
-  "bin": { "snappcrawl": "bin/snappcrawl.js" },
-  "files": ["bin", "src", "ui", "README.md", "LICENSE"],
-  "engines": { "node": ">=20" },
+  "bin": {
+    "snappcrawl": "bin/snappcrawl.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "ui",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "test": "node --test test/*.test.js",
     "demo": "node bin/snappcrawl.js demo && node bin/snappcrawl.js ui"
@@ -14,12 +25,42 @@
     "pixelmatch": "^5.3.0",
     "pngjs": "^7.0.0"
   },
-  "keywords": ["visual-regression", "ios", "simulator", "crawler", "screenshot", "testing", "qa", "idb"],
+  "keywords": [
+    "ios",
+    "simulator",
+    "xcode",
+    "swiftui",
+    "visual-regression",
+    "ui-testing",
+    "screenshot",
+    "crawler",
+    "regression",
+    "qa",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "claude-code",
+    "codex",
+    "copilot",
+    "cursor",
+    "ai-agents",
+    "github-action",
+    "idb"
+  ],
+  "author": {
+    "name": "Matthaeus Ceglarek",
+    "url": "https://github.com/mace90"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/mace90/snappcrawl.git"
   },
   "homepage": "https://github.com/mace90/snappcrawl#readme",
-  "bugs": { "url": "https://github.com/mace90/snappcrawl/issues" }
+  "bugs": {
+    "url": "https://github.com/mace90/snappcrawl/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
 }

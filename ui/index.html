@@ -99,6 +99,9 @@ pre.code{margin:10px 0 0;padding:10px 12px;border:1px solid var(--line);border-r
 .shot .frame{position:relative;border:1px solid var(--line2);border-radius:8px;overflow:hidden;background:#000;aspect-ratio:var(--ar,0.4613)}
 .shot img{display:block;width:100%;height:100%;object-fit:cover}
 .shot svg{position:absolute;inset:0;width:100%;height:100%}
+.shot .frame.draw{cursor:crosshair;outline:1px dashed var(--fg)}.shot .frame.draw img{user-select:none;-webkit-user-drag:none}
+.shot .sel{position:absolute;border:1px solid var(--fg);background:rgba(139,148,158,.3);pointer-events:none}
+.ign{display:flex;justify-content:space-between;align-items:center;gap:8px;font:12px var(--mono);margin:0 0 6px}
 .noimg{display:grid;place-content:center;height:100%;font:11px var(--mono);color:var(--dim);text-align:center;padding:12px}
 table.kv{width:100%;border-collapse:collapse;font:12px var(--mono);margin:16px 0}
 .kv td{padding:7px 0;border-bottom:1px solid var(--line)}.kv .prog{white-space:nowrap}.kv .pb{width:80px}.kv td:first-child{color:var(--mut)}.kv td:last-child{text-align:right}
@@ -155,20 +158,30 @@ table.kv{width:100%;border-collapse:collapse;font:12px var(--mono);margin:16px 0
     <section class="blk"><h2><span>02</span>App</h2>
       <label class="fl"><span>installed apps</span><select class="in" id="appsel"><option value="">loading…</option></select></label>
       <label class="fl"><span>bundle id</span><input class="in mono" id="bundle" placeholder="com.example.app" autocomplete="off" spellcheck="false"></label>
+      <label class="fl"><span>then crawl · a second build installed side by side (optional): the app above becomes the baseline, this one is crawled against it and compared</span><input class="in mono" id="then" list="applist" placeholder="com.example.app.beta" autocomplete="off" spellcheck="false"></label>
+      <label class="fl" id="thenonf" style="display:none"><span>the second build runs</span><select class="in" id="thenon"><option value="">after the first, on the same simulator · it follows the baseline</option></select></label>
+      <label class="fl" id="againstf"><span>or compare with the baseline of another app (optional)</span><input class="in mono" id="against" list="applist" placeholder="com.example.app" autocomplete="off" spellcheck="false"></label>
+      <datalist id="applist"></datalist>
       <label class="fl"><span>run label (optional)</span><input class="in mono" id="label" placeholder="v2.4.0" autocomplete="off"></label>
     </section>
     <section class="blk"><h2><span>03</span>Login</h2>
       <label class="fl"><span>username</span><input class="in" id="user" autocomplete="off" spellcheck="false"></label>
       <label class="fl"><span>password · sent to the local server only, never written to disk</span><input class="in" id="pass" type="password" autocomplete="off"></label>
+      <label class="fl"><span>pin · when the app asks for one (4, 6, 8 digits …), tapped on its number pad or typed · sent to the local server only</span><input class="in mono" id="pin" type="password" inputmode="numeric" autocomplete="off"></label>
       <div class="fl"><span>second factor</span><div class="seg" id="mfa"></div></div>
       <label class="fl" id="totpf"><span>totp secret (base32)</span><input class="in mono" id="totp" autocomplete="off" spellcheck="false"></label>
       <label class="chk"><input type="checkbox" id="fallback" checked>If automatic login fails, pause and let me log in on the device</label>
     </section>
     <section class="blk"><h2><span>04</span>Limits and interruptions</h2>
       <div class="grid3"><label class="fl"><span>max depth</span><input class="in mono" id="depth" type="number" min="1"></label><label class="fl"><span>max screens</span><input class="in mono" id="maxs" type="number" min="1"></label><label class="fl"><span>minutes</span><input class="in mono" id="mins" type="number" min="1"></label></div>
+      <label class="fl"><span>prefer · tapped before everything else, in this order (navigation comes next, list items last)</span><input class="in" id="prefer" spellcheck="false" placeholder="e.g. Konto, Einstellungen"></label>
+      <div class="grid3"><label class="fl"><span>max per list · 0 = all</span><input class="in mono" id="perlist" type="number" min="0"></label></div>
       <label class="fl"><span>blocklist · elements containing these words are never tapped</span><textarea class="in" id="block" spellcheck="false"></textarea></label>
       <div class="grid3"><label class="fl" style="grid-column:span 2"><span>system alerts (notifications, location, tracking)</span><select class="in" id="alerts"><option value="dismiss">deny automatically</option><option value="accept">allow automatically</option><option value="pause">pause and let me answer</option></select></label></div>
       <label class="fl"><span>dismiss · buttons that close onboarding sheets and hints (exact labels)</span><textarea class="in" id="dismiss" spellcheck="false"></textarea></label>
+      <div class="grid3"><label class="fl" style="grid-column:span 3"><span>app intro · screens an app shows only on its first start</span><select class="in" id="intro"><option value="">like the baseline (else keep)</option><option value="keep">keep · as it comes, marked one-time</option><option value="skip">skip · tap through it once, allow prompts, accept cookies, restart, then crawl</option><option value="fresh">fresh · reset the app first, every run has the intro</option></select></label></div>
+      <label class="fl" id="reinstallf"><span>reinstall · with fresh: a .app to install before each run (needed on an iPhone, else you are asked to)</span><input class="in mono" id="reinstall" spellcheck="false" placeholder="/path/to/App.app"></label>
+      <label class="chk"><input type="checkbox" id="follow" checked>Follow the baseline: its screens first, in its order; a tap that lands elsewhere is tried once more</label>
       <label class="chk"><input type="checkbox" id="prepare">Prepare app manually before crawl (cookie banner, onboarding, start screen)</label>
     </section>
   </div>
@@ -403,6 +416,7 @@ async function loadApps() {
   sel.innerHTML = '<option value="">loading…</option>';
   try {
     const { apps } = await api('/api/apps?udid=' + encodeURIComponent(S.udid) + (dev ? '&type=device' : ''));
+    $('#applist').innerHTML = apps.map((a) => `<option value="${esc(a.bundleId)}">${esc(a.name)}</option>`).join('');
     sel.innerHTML = '<option value="">choose an app</option>' + apps.map((a) => `<option value="${esc(a.bundleId)}"${a.bundleId === $('#bundle').value ? ' selected' : ''}>${esc(a.name)} · ${esc(a.bundleId)}${a.type === 'system' ? ' (system)' : ''}</option>`).join('');
   } catch (e) { sel.innerHTML = `<option value="">${esc(e.message.slice(0, 80))}</option>`; }
 }
@@ -418,18 +432,40 @@ function renderCli() {
   else if (sim) parts.push(`--udid "${esc(sim.name)}"`);
   if (S.mfa !== 'none') parts.push(`--mfa ${S.mfa}`);
   if ($('#depth').value) parts.push(`--max-depth ${esc($('#depth').value)}`);
+  const then = $('#then').value.trim(), against = then ? '' : $('#against').value.trim();
+  $('#againstf').style.display = then ? 'none' : '';
+  if (then) parts.push(`--then <b>${esc(then)}</b>`);
+  // a second simulator: both builds at once
+  const others = S.dtype === 'device' ? [] : (S.devices?.sims || []).filter((x) => x.udid !== S.udid);
+  const on = $('#thenon').value;
+  $('#thenon').innerHTML = `<option value="">after the first, on the same simulator · it follows the baseline</option>${others.map((x) => `<option value="${esc(x.udid)}"${x.udid === on ? ' selected' : ''}>at the same time on ${esc(x.name)} · ${esc(x.runtime)}${x.state === 'Booted' ? ' · booted' : ''} · without following</option>`).join('')}`;
+  $('#thenonf').style.display = then && others.length ? '' : 'none';
+  const par = then && others.find((x) => x.udid === $('#thenon').value);
+  if (par) parts.push(`--parallel "${esc(par.name)}"`);
+  if (against) parts.push(`--against ${esc(against)}`);
   if ($('#label').value) parts.push(`--label ${esc($('#label').value)}`);
+  if ($('#prefer').value.trim()) parts.push(`--prefer "${esc($('#prefer').value.split(',').map((s) => s.trim()).filter(Boolean).join(','))}"`);
+  if (+$('#perlist').value > 0) parts.push(`--max-per-list ${+$('#perlist').value}`);
+  if (!$('#follow').checked) parts.push('--no-follow');
+  if ($('#intro').value) parts.push(`--intro ${$('#intro').value}`);
+  if ($('#intro').value === 'fresh' && $('#reinstall').value.trim()) parts.push(`--reinstall "${esc($('#reinstall').value.trim())}"`);
+  $('#reinstallf').style.display = $('#intro').value === 'fresh' ? '' : 'none';
   if ($('#prepare').checked) parts.push('--prepare');
   $('#cli').innerHTML = '$ ' + parts.join(' ');
   const bid = $('#bundle').value.trim();
-  const b = bid && S.state?.baselines?.[bid] && S.state.runs.find((r) => r.id === S.state.baselines[bid]);
-  $('#basehint').textContent = !bid ? '' : b ? `will be compared with the baseline ${runName(b)}` : 'no baseline for this app yet · this run becomes the baseline';
+  const ref = against || bid;
+  const b = ref && S.state?.baselines?.[ref] && S.state.runs.find((r) => r.id === S.state.baselines[ref]);
+  $('#basehint').textContent = !bid ? '' : par ? `${bid} and ${then} are crawled at the same time, ${then} on ${par.name} · ${bid} becomes the baseline, then both are compared`
+    : then ? `${bid} is crawled first and becomes its baseline, then ${then} is crawled against it and compared`
+    : against ? (b ? `will be compared with the baseline of ${against} · ${runName(b)}` : `${against} has no baseline yet · crawl it first, or use then crawl`)
+    : b ? `will be compared with the baseline ${runName(b)}` : 'no baseline for this app yet · this run becomes the baseline';
 }
 function fillSetup() {
   const c = S.state.config;
   $('#bundle').value ||= c.bundleId || '';
   $('#user').value ||= c.username || '';
   $('#pass').placeholder = c.hasPassword ? 'from config / SNAPPCRAWL_PASSWORD' : '';
+  $('#pin').placeholder = c.hasPin ? 'from config / SNAPPCRAWL_PIN' : '';
   $('#totp').placeholder = c.hasTotp ? 'from config / SNAPPCRAWL_TOTP_SECRET' : 'JBSWY3DPEHPK3PXP';
   S.mfa = c.mfa || 'none';
   $('#fallback').checked = c.fallbackManual !== false;
@@ -438,6 +474,11 @@ function fillSetup() {
   $('#prepare').checked = !!c.crawl.prepare;
   $('#alerts').value = c.crawl.systemAlerts || 'dismiss';
   $('#dismiss').value = (c.crawl.dismiss || []).join(', ');
+  $('#prefer').value = (c.crawl.prefer || []).join(', ');
+  $('#intro').value = c.crawl.intro || '';
+  $('#follow').checked = c.crawl.follow !== false;
+  $('#reinstall').value ||= c.crawl.reinstall || '';
+  $('#perlist').value = c.crawl.maxPerList || 0;
   renderMfa();
 }
 $('#v-setup').addEventListener('click', (e) => {
@@ -452,9 +493,9 @@ $('#v-setup').addEventListener('input', renderCli);
 $('#appsel').addEventListener('change', (e) => { if (e.target.value) { $('#bundle').value = e.target.value; renderCli(); } });
 $('#start').onclick = async () => {
   const body = {
-    udid: S.udid, platform: S.dtype === 'device' ? 'ios-device' : 'ios-sim', bundleId: $('#bundle').value.trim(), label: $('#label').value.trim(),
-    auth: { username: $('#user').value, password: $('#pass').value, mfa: S.mfa, totpSecret: $('#totp').value.trim(), fallbackManual: $('#fallback').checked },
-    crawl: { maxDepth: +$('#depth').value || undefined, maxScreens: +$('#maxs').value || undefined, timeLimitMin: +$('#mins').value || undefined, blocklist: $('#block').value.split(',').map((s) => s.trim()).filter(Boolean), prepare: $('#prepare').checked, systemAlerts: $('#alerts').value, dismiss: $('#dismiss').value.split(',').map((s) => s.trim()).filter(Boolean) },
+    udid: S.udid, platform: S.dtype === 'device' ? 'ios-device' : 'ios-sim', bundleId: $('#bundle').value.trim(), then: $('#then').value.trim(), parallel: $('#then').value.trim() && S.dtype !== 'device' ? $('#thenon').value : '', label: $('#label').value.trim(),
+    auth: { username: $('#user').value, password: $('#pass').value, mfa: S.mfa, totpSecret: $('#totp').value.trim(), pin: $('#pin').value.trim(), fallbackManual: $('#fallback').checked },
+    crawl: { maxDepth: +$('#depth').value || undefined, maxScreens: +$('#maxs').value || undefined, timeLimitMin: +$('#mins').value || undefined, blocklist: $('#block').value.split(',').map((s) => s.trim()).filter(Boolean), prepare: $('#prepare').checked, systemAlerts: $('#alerts').value, dismiss: $('#dismiss').value.split(',').map((s) => s.trim()).filter(Boolean), prefer: $('#prefer').value.split(',').map((s) => s.trim()).filter(Boolean), maxPerList: Math.max(0, +$('#perlist').value || 0), follow: $('#follow').checked, intro: $('#intro').value, reinstall: $('#intro').value === 'fresh' ? $('#reinstall').value.trim() : '', against: $('#then').value.trim() ? '' : $('#against').value.trim() },
   };
   try { await api('/api/crawl', body); S.live = { id: null, atlas: null, log: [], logRun: null, ask: null, running: true }; runGraph.fitted = false; show('run'); }
   catch (e) { toast(e.message); }
@@ -569,6 +610,7 @@ async function loadCompare() {
   // default (same as the CLI): the newest run of an app created after its baseline; a picked head may go either way
   if (!C.head && P.head) { C.head = P.head; C.base = P.base; }
   const headRun = runs.find((r) => r.id === C.head);
+  if (headRun && !C.base && headRun.against && runs.some((r) => r.id === headRun.baseline)) C.base = headRun.baseline; // crawled against another app
   if (headRun && !C.base) C.base = (B[headRun.app] !== headRun.id && B[headRun.app]) || runs.find((r) => r.app === headRun.app && r.id !== headRun.id)?.id || '';
   if (!headRun || !C.base) {
     const why = headRun ? `Only one run of ${esc(appOf(headRun))}. Crawl the same app again after the next build.` : P.error ? esc(P.error) : 'Crawl the same app again after the next build. The first run of an app is its baseline.';
@@ -578,10 +620,46 @@ async function loadCompare() {
     return;
   }
   if (C.report && C.report.base.id === C.base && C.report.head.id === C.head) return renderCompare();
-  try { C.report = await api(`/api/report?base=${encodeURIComponent(C.base)}&head=${encodeURIComponent(C.head)}`); cmpGraph.fitted = false; }
+  try { C.report = await api(`/api/report?base=${encodeURIComponent(C.base)}&head=${encodeURIComponent(C.head)}`); cmpGraph.fitted = false; await loadRules(); }
   catch (e) { toast(e.message); return; }
   renderCompare();
 }
+// rules of the baseline's app (a cached report may predate base.app: the run list knows it)
+const ruleApp = () => S.cmp.report?.base.app || doneRuns().find((r) => r.id === S.cmp.base)?.app || '';
+async function loadRules() { S.cmp.rules = ruleApp() ? (await api(`/api/ignore?app=${encodeURIComponent(ruleApp())}`)).rules : []; }
+// a rule changed: compare again (review decisions are kept)
+async function ignoreChanged(r) {
+  const C = S.cmp;
+  C.rules = r.rules; C.draw = false;
+  C.report = await api(`/api/report?base=${encodeURIComponent(C.base)}&head=${encodeURIComponent(C.head)}&fresh=1`);
+  renderCompare();
+}
+// drawing an area on the head picture: fractions of the picture → points
+let drag = null;
+$('#v-compare').addEventListener('pointerdown', (e) => {
+  const f = e.target.closest('.frame.draw'); if (!f) return;
+  e.preventDefault();
+  const r = f.getBoundingClientRect();
+  drag = { f, r, x0: (e.clientX - r.left) / r.width, y0: (e.clientY - r.top) / r.height, el: document.createElement('div') };
+  drag.el.className = 'sel'; f.append(drag.el); f.setPointerCapture(e.pointerId);
+});
+$('#v-compare').addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  const { r, x0, y0, el } = drag;
+  const x = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), y = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
+  Object.assign(drag, { x1: x, y1: y });
+  Object.assign(el.style, { left: `${Math.min(x0, x) * 100}%`, top: `${Math.min(y0, y) * 100}%`, width: `${Math.abs(x - x0) * 100}%`, height: `${Math.abs(y - y0) * 100}%` });
+});
+$('#v-compare').addEventListener('pointerup', async () => {
+  if (!drag) return;
+  const { x0, y0, x1 = x0, y1 = y0 } = drag; drag = null;
+  const C = S.cmp, s = C.report.screens.find((x) => x.id === C.sel);
+  const [W, H] = s.pt, round = (v) => Math.round(v);
+  const area = { x: round(Math.min(x0, x1) * W), y: round(Math.min(y0, y1) * H), w: round(Math.abs(x1 - x0) * W), h: round(Math.abs(y1 - y0) * H) };
+  if (area.w < 4 || area.h < 4) { renderInspector(); return toast('drag to mark an area'); }
+  try { await ignoreChanged(await api('/api/ignore', { app: ruleApp(), screen: s.name, area })); toast(`area ignored on ${s.name}`); } catch (err) { toast(err.message); }
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && S.cmp?.draw) { S.cmp.draw = false; drag = null; renderInspector(); } });
 const decided = (id) => S.cmp.report.review[id]?.decision;
 const exportUrl = (type) => `/api/export?base=${encodeURIComponent(S.cmp.base)}&head=${encodeURIComponent(S.cmp.head)}&type=${type}`;
 const exportMenu = () => `<details class="menu"><summary class="btn sm">Export</summary><div class="pop"><a class="mi" href="${esc(exportUrl('summary'))}" download>Summary (HTML)<small>text only</small></a><a class="mi" href="${esc(exportUrl('full'))}" download>Full report (HTML)<small>graph + images</small></a></div></details>`;
@@ -589,7 +667,8 @@ function renderCompare() {
   const C = S.cmp, R = C.report; if (!R) return;
   const runs = doneRuns(), B = S.state.baselines || {};
   const headRun = runs.find((r) => r.id === C.head) || {};
-  const same = runs.filter((r) => r.app === headRun.app);
+  // runs of the same app, and the baseline of another app this run was crawled against
+  const same = runs.filter((r) => r.app === headRun.app || r.id === headRun.baseline || r.id === C.base);
   const opt = (r, cur) => `<option value="${esc(r.id)}"${r.id === cur ? ' selected' : ''}>${esc(runName(r))}${B[r.app] === r.id ? ' · baseline' : ''}</option>`;
   const apps = [...new Set(runs.map((r) => r.app))];
   const headSel = apps.map((app) => `<optgroup label="${esc(appOf(runs.find((r) => r.app === app)))}">${runs.filter((r) => r.app === app).map((r) => opt(r, C.head)).join('')}</optgroup>`).join('');
@@ -599,17 +678,19 @@ function renderCompare() {
   const h1 = open.length ? `${open.length} of ${R.screens.length} screens need review` : rejected ? `Reviewed · ${rejected} rejected` : 'Reviewed · no open changes';
   $('#cmphead').innerHTML = `<div><p class="sub" style="margin:0 0 6px;color:var(--fg)">${esc(appOf(headRun))} <span style="color:var(--mut)">· ${esc(headRun.app || '')}</span></p><h1>${h1}</h1><p class="sub">base <select class="sel2" data-c="base" aria-label="baseline run">${baseSel}</select> → head <select class="sel2" data-c="head" aria-label="run to check">${headSel}</select></p></div>
     <div style="display:grid;gap:10px;justify-items:end"><div class="filters">${Object.entries(STATUS).filter(([k]) => k !== 'skipped' || R.summary.skipped).map(([k, l]) => `<button class="fbtn${C.filter === k ? ' on' : ''}" data-f="${k}" aria-pressed="${C.filter === k}"><i class="k-${k}"></i>${l} ${R.summary[k]}</button>`).join('')}</div>
-    <div class="prog"><span>reviewed ${review.length - open.length}/${review.length}</span><span class="pb"><i style="width:${review.length ? ((review.length - open.length) / review.length) * 100 : 100}%"></i></span>${exportMenu()}</div></div>`;
+    <div class="prog"><span>reviewed ${review.length - open.length}/${review.length}</span><span class="pb"><i style="width:${review.length ? ((review.length - open.length) / review.length) * 100 : 100}%"></i></span>${exportMenu()}<button class="btn sm" data-go="setup">New crawl</button></div></div>`;
   const nodes = R.screens.map((s) => ({ id: s.id, name: s.name, depth: s.depth, status: s.status, cls: [decided(s.id) ? 'r-' + decided(s.id) : '', s.oneTime ? 'one' : ''].join(' ').trim(), img: file(s.headImg || s.baseImg), placeholder: s.reason === 'crash' ? 'crash' : 'no screen', foot: s.status === 'changed' ? `Δ ${pct(s.ratio)}` : s.status === 'same' ? 'Δ 0.00 %' : s.reason || s.status }));
   const st = Object.fromEntries(R.screens.map((s) => [s.id, s.status]));
   const edges = R.edges.map((e) => ({ ...e, kind: st[e.to] === 'bad' ? 'bad' : st[e.to] === 'new' ? 'new' : '' }));
   cmpGraph.render(nodes, edges, { sel: C.sel, dim: C.filter ? (x) => (x.to ? st[x.to] : x.status) !== C.filter : null, legend: Object.entries(STATUS).filter(([k]) => k !== 'skipped' || R.summary.skipped).map(([k, l]) => `<span><i class="k-${k}"></i>${l}</span>`).join('') });
   renderInspector();
 }
-function shot(cap, img, s, marks) {
+function shot(cap, img, s, marks, draw = false) {
   const ar = s.size ? s.size[0] / s.size[1] : 0.4613;
-  const box = marks && s.size ? `<svg viewBox="0 0 ${s.size[0]} ${s.size[1]}" preserveAspectRatio="none">${s.boxes.map((b) => `<rect x="${b[0]}" y="${b[1]}" width="${b[2]}" height="${b[3]}" fill="rgba(248,81,73,.08)" stroke="#f85149" stroke-width="${s.size[0] / 200}" stroke-dasharray="${s.size[0] / 60} ${s.size[0] / 90}"/>`).join('')}</svg>` : '';
-  return `<figure class="shot"><figcaption>${cap}</figcaption><div class="frame" style="--ar:${ar}">${img ? `<img alt="${esc(cap)}" src="${file(img)}" loading="lazy">` : `<div class="noimg">${s.reason === 'crash' ? 'app crashed<br>before render' : 'no screenshot'}</div>`}${box}</div></figure>`;
+  const k = s.size && s.pt ? s.size[0] / s.pt[0] : 3; // pixels per point
+  const ign = s.size ? (s.ignored || []).map((a) => (a ? `<rect x="${a.x * k}" y="${a.y * k}" width="${a.w * k}" height="${a.h * k}" fill="rgba(139,148,158,.35)" stroke="#8b949e" stroke-width="${s.size[0] / 250}"/>` : '')).join('') : '';
+  const box = (marks || ign) && s.size ? `<svg viewBox="0 0 ${s.size[0]} ${s.size[1]}" preserveAspectRatio="none">${ign}${marks ? s.boxes.map((b) => `<rect x="${b[0]}" y="${b[1]}" width="${b[2]}" height="${b[3]}" fill="rgba(248,81,73,.08)" stroke="#f85149" stroke-width="${s.size[0] / 200}" stroke-dasharray="${s.size[0] / 60} ${s.size[0] / 90}"/>`).join('') : ''}</svg>` : '';
+  return `<figure class="shot"><figcaption>${cap}</figcaption><div class="frame${draw ? ' draw' : ''}" style="--ar:${ar}">${img ? `<img alt="${esc(cap)}" src="${file(img)}" loading="lazy">` : `<div class="noimg">${s.reason === 'crash' ? 'app crashed<br>before render' : 'no screenshot'}</div>`}${box}</div></figure>`;
 }
 function renderInspector() {
   const C = S.cmp, R = C.report, s = R.screens.find((x) => x.id === C.sel);
@@ -625,9 +706,15 @@ function renderInspector() {
   let images;
   if (s.status === 'changed') {
     images = `<div class="mode">${[['side', 'side by side'], ['diff', 'pixel diff'], ['head', 'head only']].map(([k, l]) => `<button data-m="${k}" class="${C.mode === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
-    images += C.mode === 'diff' ? `<div class="pair one">${shot('diff', s.diffImg, s, false)}</div>` : C.mode === 'head' ? `<div class="pair one">${shot('head · ' + esc(R.head.label || R.head.id), s.headImg, s, C.marks)}</div>` : `<div class="pair">${shot('base · ' + esc(R.base.label || R.base.id), s.baseImg, s, false)}${shot('head · ' + esc(R.head.label || R.head.id), s.headImg, s, C.marks)}</div>`;
+    images += C.mode === 'diff' ? `<div class="pair one">${shot('diff', s.diffImg, s, false)}</div>` : C.mode === 'head' ? `<div class="pair one">${shot('head · ' + esc(R.head.label || R.head.id), s.headImg, s, C.marks, C.draw)}</div>` : `<div class="pair">${shot('base · ' + esc(R.base.label || R.base.id), s.baseImg, s, false)}${shot('head · ' + esc(R.head.label || R.head.id), s.headImg, s, C.marks, C.draw)}</div>`;
     images += `<label class="chk"><input type="checkbox" data-c="marks"${C.marks ? ' checked' : ''}>mark changed regions</label>`;
-  } else images = `<div class="pair">${shot('base · ' + esc(R.base.label || R.base.id), s.baseImg, s, false)}${shot('head · ' + esc(R.head.label || R.head.id), s.headImg, s, false)}</div>`;
+  } else images = `<div class="pair">${shot('base · ' + esc(R.base.label || R.base.id), s.baseImg, s, false)}${shot('head · ' + esc(R.head.label || R.head.id), s.headImg, s, false, C.draw)}</div>`;
+  // areas left out of the pixel comparison: drawn on the head picture, kept per app and screen
+  const mine = (C.rules || []).map((r, i) => ({ ...r, i })).filter((r) => r.screen === s.name || r.screen === s.baseName);
+  const canIgnore = s.headImg && s.baseImg && s.pt;
+  const ignSec = canIgnore || mine.length ? `<div class="sec"><h4>ignored in the pixel comparison</h4>${mine.map((r) => `<div class="ign"><span>${r.area ? `${r.area.x},${r.area.y} · ${r.area.w}×${r.area.h} pt` : 'the whole screen'}</span><button class="btn sm" data-ign-rm="${r.i}">Remove</button></div>`).join('')}
+    ${C.draw ? '<p class="hint" style="margin:0 0 8px;color:var(--fg)">Drag over the head picture to mark the area. Esc cancels.</p>' : ''}
+    ${canIgnore ? `<div class="acts"><button class="btn sm${C.draw ? ' on' : ''}" data-ign="area">${C.draw ? 'Cancel' : 'Ignore an area'}</button>${mine.some((r) => !r.area) ? '' : '<button class="btn sm" data-ign="all">Ignore the screen</button>'}</div>` : ''}</div>` : '';
   const note = R.notes[s.id];
   const acts = s.status === 'same' ? '<p class="hint" style="margin:0">Identical to the baseline.</p>'
     : s.status === 'skipped' ? '<p class="hint" style="margin:0">Shown only once (e.g. onboarding) and not in both runs, so it is not compared.</p>'
@@ -636,8 +723,20 @@ function renderInspector() {
   $('#cmpside').innerHTML = `${done}<div class="it"><h3>${esc(s.name)}</h3><span class="tag t-${dec || s.status}">${esc(label)}</span></div>
     <p class="path">${['start', ...s.path].map(esc).join(' → ')}</p>${images}
     <table class="kv"><tr><td>screen</td><td>${esc(s.id)}</td></tr><tr><td>status</td><td>${esc(s.reason || STATUS[s.status])}</td></tr><tr><td>pixel Δ</td><td>${pct(s.ratio)}</td></tr><tr><td>regions</td><td>${s.boxes.length}</td></tr><tr><td>elements</td><td>${s.elements ?? '–'}</td></tr>${s.size ? `<tr><td>size</td><td>${s.size[0]}×${s.size[1]}</td></tr>` : ''}</table>
+    ${s.texts ? `<div class="sec"><h4>texts</h4>${s.texts.added.slice(0, 8).map((x) => `<p class="hint" style="margin:0 0 4px;color:var(--fg)">+ ${esc(x)}</p>`).join('')}${s.texts.removed.slice(0, 8).map((x) => `<p class="hint" style="margin:0 0 4px">− ${esc(x)}</p>`).join('')}</div>` : ''}
+    ${hintLines(s).length ? `<div class="sec"><h4>buttons</h4>${hintLines(s).map((l) => `<p class="hint" style="margin:0 0 4px;color:var(--fg)">${esc(l)}</p>`).join('')}</div>` : ''}
+    ${ignSec}
     ${note ? `<div class="note"><b>note · ${esc(note.model)} · ${esc(note.verdict)}</b>${esc(note.summary)}</div>` : ''}
     <div class="acts">${acts}</div>${list}`;
+}
+// buttons renamed, moved or removed (the same lines as in the exported report)
+function hintLines(s) {
+  const h = s.hints; if (!h) return [];
+  const leads = (x) => (x === true ? ' · leads to the same screen' : x === false ? ' · leads elsewhere' : '');
+  const move = ({ dx, dy }) => [Math.abs(dy) >= 1 ? `${Math.abs(dy)} pt ${dy > 0 ? 'down' : 'up'}` : '', Math.abs(dx) >= 1 ? `${Math.abs(dx)} pt ${dx > 0 ? 'right' : 'left'}` : ''].filter(Boolean).join(', ') || 'in place';
+  const q = (l) => `"${String(l).length > 40 ? String(l).slice(0, 39) + '…' : l}"`;
+  const gone = h.removed.slice(0, 5).map(q).join(', ') + (h.removed.length > 5 ? ` and ${h.removed.length - 5} more` : '');
+  return [...h.renamed.map((r) => `renamed ${q(r.from)} → ${q(r.to)} · same place${leads(r.same)}`), ...h.moved.map((m) => `moved ${q(m.label)} · ${move(m)}${leads(m.same)}`), ...(h.removed.length ? [`removed ${gone}`] : [])];
 }
 $('#v-compare').addEventListener('click', async (e) => {
   const b = e.target.closest('button'); if (!b) return;
@@ -645,6 +744,9 @@ $('#v-compare').addEventListener('click', async (e) => {
   if (b.dataset.f) { C.filter = C.filter === b.dataset.f ? null : b.dataset.f; renderCompare(); }
   else if (b.dataset.sel) { C.sel = b.dataset.sel; renderCompare(); }
   else if (b.dataset.m) { C.mode = b.dataset.m; renderInspector(); }
+  else if (b.dataset.ign === 'area') { C.draw = !C.draw; if (C.draw && C.mode === 'diff') C.mode = 'side'; renderInspector(); }
+  else if (b.dataset.ign === 'all') { const s = C.report.screens.find((x) => x.id === C.sel); try { await ignoreChanged(await api('/api/ignore', { app: ruleApp(), screen: s.name, area: null })); toast(`pixels of ${s.name} ignored`); } catch (err) { toast(err.message); } }
+  else if ('ignRm' in b.dataset) { try { await ignoreChanged(await api('/api/ignore/remove', { app: ruleApp(), index: +b.dataset.ignRm })); toast('compared again'); } catch (err) { toast(err.message); } }
   else if ('d' in b.dataset) { const r = await api('/api/review', { base: C.base, head: C.head, screen: C.sel, decision: b.dataset.d || null }); C.report.review = r.review; renderCompare(); }
   else if (b.dataset.c === 'baseline') { await api('/api/baseline', { run: C.head }); toast('baseline updated'); await loadState(); C.base = ''; C.report = null; C.head = ''; loadCompare(); }
   else if (b.dataset.c === 'notes') { b.disabled = true; toast('requesting notes…'); try { C.report = await api('/api/notes', { base: C.base, head: C.head }); renderCompare(); } catch (err) { toast(err.message); b.disabled = false; } }

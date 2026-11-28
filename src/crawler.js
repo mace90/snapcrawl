@@ -1,9 +1,12 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { signature, similarity } from './signature.js';
-import { DEFAULT_DISMISS, alertFromElements, dismissButton, isConsent, isPermissionAlert, isWebLink, pickButton } from './interrupts.js';
+import { signature, similarity, tabsOf } from './signature.js';
+import { DEFAULT_DISMISS, alertFromElements, consentAccept, dismissButton, introButtons, isConsent, isPermissionAlert, isWebLink, pickButton } from './interrupts.js';
 import { totp } from './totp.js';
+import { describeMove, pairActions } from './pairing.js';
+import { fileHasScrollBar } from './scrollbar.js';
+import { comparePng } from './diff.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -11,6 +14,8 @@ const TAPPABLE = /^(button|cell|link|tab|tabbarbutton|menuitem|checkbox)$/i;
 const BACK = /^(back|zurück|close|schließen|cancel|abbrechen|done|fertig)$/i;
 const SUBMIT = /^(log ?in|sign ?in|anmelden|einloggen|continue|weiter|next|submit|verify|bestätigen|ok)$/i;
 const OTP = /(code|otp|2fa|one[- ]?time|verification|bestätigung)/i;
+const PIN = /\b(pin|passcode|geheimzahl|zugangscode|sicherheitscode|entsperrcode|app[- ]?code)\b/i;
+const DIGIT = /^\s*(\d)(\s+[a-z+]*)?\s*$/i; // "5", or "5 JKL" on a phone-style keypad
 
 const isText = (e) => /statictext/i.test(e.type);
 const isField = (e) => /textfield|textview|searchfield/i.test(e.type);
@@ -26,7 +31,8 @@ const clip = (s, n = 32) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
  * Only a screen that is nothing but web content is identified by it.
  */
 export function fingerprint(els) {
-  const part = (e) => (isText(e) ? 't:' + norm(e.label).slice(0, 40) : `${e.type}:${e.id || norm(e.label)}`);
+  const tabs = tabsOf(els); // by place, like in the signature
+  const part = (e) => (e.tab ? `Tab:#${tabs.indexOf(e) + 1}` : isText(e) ? 't:' + norm(e.label).slice(0, 40) : `${e.type}:${e.id || norm(e.label)}`);
   const relevant = els.filter((e) => !/^(application|window|other|webview)$/i.test(e.type));
   const own = relevant.filter((e) => !e.web);
   const parts = (own.length ? own : relevant).map(part);
@@ -40,12 +46,15 @@ function screenSize(els) {
 
 /**
  * A readable screen name, ignoring web content:
- * navigation bar title → selected tab → first large text near the top → the action that led here.
+ * navigation bar title → a heading at the top → selected tab → first large text near the top → the action that led here.
  */
 export function nameOf(els, size, via) {
   const own = els.filter((e) => !e.web);
   const nav = own.find((e) => /navigationbar/i.test(e.type) && (e.label || e.id));
   if (nav) return clip(nav.label || nav.id);
+  // iOS 26 lists a SwiftUI navigation title as a heading, not inside a navigation bar
+  const heading = own.find((e) => /^heading$/i.test(e.type) && !e.tab && e.label.length > 1 && e.label.length <= 40 && e.y < size.h * 0.25);
+  if (heading) return clip(heading.label);
   const tab = own.find((e) => e.tab && e.selected && e.label);
   if (tab) return clip(tab.label);
   const texts = own
@@ -64,11 +73,37 @@ export function uniqueName(seen, name) {
   return n === 1 ? name : `${name} (${n})`;
 }
 
-function actionsOf(els, size, blocklist, { webLinks = 'skip' } = {}) {
+// What is tapped first. Navigation shows the main areas of an app, so it comes before
+// everything else; list cells come last because a list usually leads to one kind of screen.
+//   prefer  labels from crawl.prefer, in the order given
+//   nav     tab bar, navigation bar, toolbar, segmented control, menu buttons
+//   button  every other button
+//   item    list cells and links
+export const TIERS = ['prefer', 'nav', 'button', 'item'];
+const MENU = /^(menu|menü|more|mehr|☰|≡)$/i;
+const MENU_ID = /menu|hamburger|sidebar|drawer/i;
+const LISTS = /^(table|collectionview)$/i;
+const BAR_TYPES = { navigationbar: 'nav', tabbar: 'tab', toolbar: 'tool', segmentedcontrol: 'segment' };
+const barOf = (e) => e.bar || BAR_TYPES[String(e.type).toLowerCase()] || null;
+const inside = (p, r) => p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+// most of e lies in r (a row that only slides under a toolbar is not part of it)
+const within = (e, r) => {
+  const w = Math.min(e.x + e.w, r.x + r.w) - Math.max(e.x, r.x);
+  const h = Math.min(e.y + e.h, r.y + r.h) - Math.max(e.y, r.y);
+  return w > 0 && h > 0 && (w * h) / (e.w * e.h) >= 0.75;
+};
+const isBack = (e) => !!e.back || BACK.test(e.label);
+// One key per tab across the whole run: the tab bar looks the same on every screen.
+const tabKey = (a) => `tab:${a.id || norm(a.label) || Math.round(a.x)}`;
+
+function actionsOf(els, size, blocklist, { webLinks = 'skip', prefer = [], maxPerList = 0 } = {}) {
   const seen = new Set();
   const actions = [];
   const blocked = [];
   const web = [];
+  const bars = els.filter(barOf);
+  const lists = els.filter((e) => LISTS.test(e.type)).sort((a, b) => a.w * a.h - b.w * b.h); // innermost first
+  const wanted = prefer.map((p) => String(p).trim().toLowerCase()).filter(Boolean);
   for (const e of els) {
     if (!TAPPABLE.test(e.type) || !e.enabled || e.w < 8 || e.h < 8) continue;
     const c = center(e);
@@ -82,14 +117,40 @@ function actionsOf(els, size, blocklist, { webLinks = 'skip' } = {}) {
       blocked.push(e.label);
       continue;
     }
-    if (BACK.test(e.label)) continue;
+    if (isBack(e)) continue;
     const key = `${e.type}:${e.id || norm(e.label) || `${Math.round(c.x)},${Math.round(c.y)}`}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    actions.push({ type: e.type, label: e.label, id: e.id, x: c.x, y: c.y });
+    const bar = barOf(bars.find((b) => b !== e && within(e, b)) || {});
+    const tab = !!e.tab || /^(tab|tabbarbutton)$/i.test(e.type) || bar === 'tab';
+    const nav = tab || !!bar || MENU.test(e.label) || MENU_ID.test(e.id);
+    const text = `${e.label} ${e.id}`.toLowerCase();
+    const rank = wanted.findIndex((w) => text.includes(w));
+    const cell = /^cell$/i.test(e.type) || !!e.cell;
+    const tier = rank >= 0 ? 'prefer' : nav ? 'nav' : cell || /^link$/i.test(e.type) ? 'item' : 'button';
+    const list = cell && tier === 'item' ? (() => {
+      const i = lists.findIndex((l) => l !== e && inside(c, l));
+      return i >= 0 ? `list${i}` : `col${Math.round(e.x)}:${Math.round(e.w)}`; // no list container: same column and width
+    })() : null;
+    actions.push({ type: e.type, label: e.label, id: e.id, x: c.x, y: c.y, tier, ...(tab ? { tab: true } : {}), _rank: rank, _list: list });
   }
-  actions.sort((a, b) => a.y - b.y || a.x - b.x);
-  return { actions, blocked, web: [...new Set(web)] };
+  actions.sort((a, b) => TIERS.indexOf(a.tier) - TIERS.indexOf(b.tier) || a._rank - b._rank || a.y - b.y || a.x - b.x);
+  // crawl.maxPerList: only the first n cells of each list
+  const perList = new Map();
+  let limited = 0;
+  const kept = actions.filter((a) => {
+    if (!maxPerList || !a._list) return true;
+    const n = (perList.get(a._list) || 0) + 1;
+    perList.set(a._list, n);
+    if (n <= maxPerList) return true;
+    limited++;
+    return false;
+  });
+  for (const a of kept) {
+    delete a._rank;
+    delete a._list;
+  }
+  return { actions: kept, blocked, web: [...new Set(web)], limited };
 }
 
 const appLabel = (els) => els.find((e) => /^application$/i.test(e.type))?.label || '';
@@ -106,7 +167,7 @@ export const formatEta = (ms) => (ms == null ? 'estimating' : ms < 60_000 ? '<1 
 const refOf = (a) => ({ type: a.type, label: a.label, id: a.id, x: a.x, y: a.y });
 
 /**
- * Breadth-first exploration of an app.
+ * Breadth-first exploration of an app: level by level, navigation first (see TIERS).
  *
  * io: { log(level, msg), ask(kind, prompt) -> Promise<string>, event(type, data), aborted() }
  * Returns the atlas (also written to <outDir>/runs/<id>/atlas.json while crawling).
@@ -117,6 +178,19 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
   const log = (lvl, msg) => io.log(lvl, msg);
   const event = (type, data) => io.event?.(type, data);
   const settle = (f = 1) => sleep(c.settleMs * f);
+  // Every call that can change what is on screen counts as a move. A read with no move since
+  // needs no second read (each idb or WebDriverAgent call costs a few hundred ms).
+  let moves = 0;
+  let lastObs = null;
+  const MOVES = new Set(['tap', 'launch', 'type', 'alertAction', 'activate', 'resetData', 'reinstall']);
+  const raw = driver;
+  driver = new Proxy(raw, {
+    get(t, k) {
+      const v = Reflect.get(t, k);
+      if (typeof v !== 'function') return v;
+      return MOVES.has(k) ? (...a) => (moves++, v.apply(t, a)) : v.bind(t);
+    },
+  });
 
   const runId = store.newRunId(label);
   const dir = store.runDir(runId);
@@ -126,7 +200,7 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
   const deadline = started + c.timeLimitMin * 60_000;
   const atlas = {
     version: 1,
-    meta: { id: runId, label, created: new Date(started).toISOString(), app: cfg.app.bundleId, device: null, status: 'running', limits: { maxDepth: c.maxDepth, maxScreens: c.maxScreens, timeLimitMin: c.timeLimitMin } },
+    meta: { id: runId, label, created: new Date(started).toISOString(), app: cfg.app.bundleId, device: null, status: 'running', limits: { maxDepth: c.maxDepth, maxScreens: c.maxScreens, timeLimitMin: c.timeLimitMin, maxPerList: c.maxPerList || 0, prefer: c.prefer || [] } },
     screens: [],
     edges: [],
   };
@@ -169,6 +243,9 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
   let entry = null; // where the app opens: the root, or a later "launch screen" once the root was one-time
   let rootApp = ''; // Application label of the app, to notice when another app is in front
   const threshold = c.matchThreshold ?? 0.8;
+  // crawl.against: this run is compared with the baseline of another app (a second build
+  // installed under its own bundle id), else with the baseline of this app
+  const compareApp = c.against || cfg.app.bundleId;
 
   // How well what is on screen matches a known screen: 1 for the same fingerprint, else the
   // similarity of their signatures (stable parts only, see signature.js).
@@ -217,9 +294,48 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
         await answerAlert(a);
         continue;
       }
-      return { els, fp: fingerprint(els), sig: signature(els) };
+      const o = { els, fp: fingerprint(els), sig: signature(els) };
+      lastObs = { o, moves };
+      return o;
     }
   };
+  // what is on screen: the last read when nothing was tapped since, else a new one
+  const current = () => (lastObs && lastObs.moves === moves ? lastObs.o : observe());
+
+  // After a tap or a launch the screen may still be moving (during a push animation the old and
+  // the new list are both on screen) or loading (nearly empty). Read until two reads in a row
+  // agree and the screen is not empty, at most 5 more reads.
+  // Same structure is not enough: mid-animation two reads list the same elements at other
+  // places. So the layout is compared: type, position and size of every element (2 pt grid),
+  // without texts, so a changing feed text or clock does not count as movement.
+  const layout = (els) => els.map((e) => `${e.type}@${Math.round(e.x / 2)},${Math.round(e.y / 2)},${Math.round(e.w / 2)},${Math.round(e.h / 2)}`).sort().join('|');
+  async function observeSettled() {
+    let o = await observe();
+    for (let i = 0; i < 5; i++) {
+      await sleep(c.settleMs / 3);
+      const n = await observe();
+      const still = layout(n.els) === layout(o.els);
+      o = n;
+      if (still && o.els.length > 2) return o;
+      if (still && rootApp && appLabel(o.els) && appLabel(o.els) !== rootApp) return o; // another app in front (a crash: the home screen)
+    }
+    return o;
+  }
+  // After a tap: a short wait, then reads until the layout stands still. Most taps start their
+  // transition at once, so this is done after about half of settleMs. Only while the screen still
+  // looks as before the tap is the full settleMs waited for, so a transition that starts late
+  // (the app asks its server first) is not taken for a tap that did nothing.
+  async function afterTap(before) {
+    const t0 = Date.now();
+    await sleep(c.settleMs / 3);
+    let n = await observeSettled();
+    const left = c.settleMs - (Date.now() - t0);
+    if (left > 0 && before && layout(n.els) === layout(before.els)) {
+      await sleep(left);
+      n = await observeSettled();
+    }
+    return n;
+  }
 
   // Tap away onboarding sheets and hints until a wanted screen (predicate) is on screen, or
   // nothing is left to dismiss. Cookie and privacy screens are never touched.
@@ -232,7 +348,7 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
       log('INFO', `dismiss "${b.label}" (${why})`);
       await tapEl(b);
       await settle(1.5);
-      o = await observe();
+      o = await observeSettled();
     }
     return o;
   }
@@ -248,8 +364,26 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
     if (b) await tapEl(b);
   };
 
-  const isLogin = (els) => els.some(isSecure);
-  const isOtp = (els) => !isLogin(els) && els.some((e) => isField(e) && OTP.test(`${e.label} ${e.value} ${e.id}`));
+  // A PIN prompt: the app's own number pad (buttons 0–9) or the system number pad (keys 0–9),
+  // or a field, on a screen that says PIN (passcode, Geheimzahl, …), or a number pad next to a
+  // secure field. A form with a user name and a password is a login, not a PIN.
+  const keypadOf = (els) => {
+    const pad = new Map();
+    for (const e of els) {
+      const d = /^(button|key)$/i.test(e.type) && e.enabled ? DIGIT.exec(e.label)?.[1] : null;
+      if (d && !pad.has(d)) pad.set(d, e);
+    }
+    return pad.size === 10 ? pad : null;
+  };
+  const pinField = (els) => els.find((e) => isSecure(e) || (isField(e) && PIN.test(`${e.label} ${e.value} ${e.id}`)));
+  const isPin = (els) => {
+    if (els.some(isSecure) && els.some((e) => isField(e) && !isSecure(e))) return false;
+    const says = els.some((e) => PIN.test(`${e.label} ${e.value || ''} ${e.id || ''}`));
+    const pad = keypadOf(els);
+    return says ? !!(pad || pinField(els)) : !!pad && els.some(isSecure);
+  };
+  const isLogin = (els) => els.some(isSecure) && !isPin(els);
+  const isOtp = (els) => !isLogin(els) && !isPin(els) && els.some((e) => isField(e) && OTP.test(`${e.label} ${e.value} ${e.id}`));
 
   async function manual(prompt, kind = 'manual') {
     log('WAIT', prompt);
@@ -303,21 +437,170 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
     }
   }
 
+  // auth.pin: typed into a field, or tapped digit by digit on a number pad. Never retried with
+  // the same PIN on the same prompt (a wrong PIN may lock the account); a second prompt that
+  // looks different ("confirm your PIN") gets it once more.
+  async function enterPin(o) {
+    const pin = String(auth.pin ?? '').trim();
+    if (!pin) {
+      await manual('PIN screen detected. Enter the PIN on the device (or set auth.pin / SNAPPCRAWL_PIN), then continue.');
+      return observeSettled();
+    }
+    const seen = new Set();
+    for (let round = 0; round < 2 && isPin(o.els) && !seen.has(o.fp); round++) {
+      seen.add(o.fp);
+      const pad = keypadOf(o.els);
+      const field = pinField(o.els);
+      if (pad && /^\d+$/.test(pin)) {
+        log('AUTH', `pin screen · tapping ${pin.length} digits on the number pad`);
+        for (const d of pin) {
+          await tapEl(pad.get(d));
+          await settle(0.3);
+        }
+      } else if (field) {
+        log('AUTH', `pin screen · typing ${pin.length} characters`);
+        await tapEl(field);
+        await settle(0.3);
+        await driver.type(pin);
+      } else break;
+      await settle(1.5);
+      o = await observeSettled();
+      // no automatic submit on this screen: a button like "OK" or "Weiter"
+      const ok = isPin(o.els) ? o.els.find((e) => /button/i.test(e.type) && e.enabled && SUBMIT.test(e.label)) : null;
+      if (ok) {
+        await tapEl(ok);
+        await settle(1.5);
+        o = await observeSettled();
+      }
+    }
+    if (isPin(o.els)) {
+      if (!auth.fallbackManual) throw new Error('The PIN was not accepted and manual fallback is disabled.');
+      warn('the PIN was not accepted · not tried again (a wrong PIN may lock the account) · enter it on the device');
+      await manual('Enter the PIN on the device, then continue.');
+      o = await observeSettled();
+    } else log('AUTH', 'pin accepted');
+    return o;
+  }
+
+  // a login, a PIN, or a login followed by a PIN
   async function ensureAuth(o) {
-    if (!isLogin(o.els)) return o;
-    await login(o.els);
-    return observe();
+    for (let i = 0; i < 3; i++) {
+      if (isPin(o.els)) o = await enterPin(o);
+      else if (isLogin(o.els)) {
+        await login(o.els);
+        o = await observeSettled();
+      } else break;
+    }
+    return o;
+  }
+
+  /* ---------- the app intro: screens an app shows only on its first start ----------
+   * keep   as it comes: an intro on a fresh app is crawled and marked one-time
+   * skip   a warm-up first: tap through the intro, allow permission prompts, accept cookie
+   *        banners, restart; repeated until the app opens the same way twice. Then the crawl.
+   * fresh  reset the app first (simulator: its data and permissions; --reinstall: uninstall and
+   *        install the given build; else you are asked to), so every run starts with the intro
+   * Not set: the mode of the app's baseline, so a comparison run starts the same way. */
+  function introMode() {
+    if (c.intro && !['keep', 'skip', 'fresh'].includes(c.intro)) throw new Error(`intro must be keep, skip or fresh, not "${c.intro}"`);
+    if (c.intro) return { mode: c.intro, inherited: false };
+    const base = store.baselineFor?.(compareApp);
+    let mode = null;
+    try {
+      mode = base ? store.readRun(base).meta.intro : null;
+    } catch {}
+    return { mode: mode || 'keep', inherited: !!mode && mode !== 'keep' };
+  }
+
+  async function resetApp() {
+    const name = atlas.meta.appName || cfg.app.bundleId;
+    if (c.reinstall) {
+      if (!driver.reinstall) throw new Error('this device cannot install apps · leave out --reinstall');
+      log('INFO', `intro.fresh reinstalling ${name} from ${path.basename(c.reinstall)}`);
+      await driver.reinstall(c.reinstall);
+    } else if (driver.resetData) {
+      log('INFO', `intro.fresh resetting ${name} · documents, settings, caches, permissions`);
+      await driver.resetData();
+    } else {
+      await manual(`Delete ${name} on the iPhone and install it again, so it starts like the first time (or crawl with --reinstall <App.app>). Then continue.`, 'prepare');
+    }
+  }
+
+  const autoConsent = () => atlas.meta.intro === 'skip' || atlas.meta.intro === 'fresh';
+  const hasTabBar = (els) => els.some((e) => e.tab || barOf(e) === 'tab');
+
+  // One launch: tap through what is in the way until the app's own screens (a tab bar, a
+  // login, nothing left to tap). Returns the number of taps and the first screen's fingerprint.
+  async function throughIntro() {
+    await driver.launch();
+    await sleep(c.launchMs);
+    const tried = new Set();
+    let taps = 0;
+    let first = null;
+    for (let i = 0; i < 25; i++) {
+      if (driver.alert) {
+        const a = await driver.alert().catch(() => null);
+        if (a && isPermissionAlert(a.buttons)) {
+          const b = pickButton(a.buttons, 'accept');
+          log('INFO', `intro.skip alert "${clip(a.text.replace(/\s+/g, ' '), 50)}" → allow${b ? ` "${b}"` : ''}`);
+          await driver.alertAction('accept', b);
+          await settle();
+          taps++;
+          continue;
+        }
+      }
+      const els = await driver.elements();
+      const a = driver.alert ? null : alertFromElements(els);
+      if (a) {
+        const b = a.els.find((e) => e.label === pickButton(a.buttons, 'accept')) || a.els.at(-1);
+        log('INFO', `intro.skip alert "${clip(a.text.replace(/\s+/g, ' '), 50)}" → allow "${b.label}"`);
+        await tapEl(b);
+        await settle();
+        taps++;
+        continue;
+      }
+      const fp = fingerprint(els);
+      first ??= fp;
+      if (isLogin(els) || isPin(els)) break; // the login and the PIN are handled by the crawl
+      const consent = consentAccept(els);
+      const b = consent || (hasTabBar(els) ? null : introButtons(els, { dismiss: dismissWords, blocklist: c.blocklist }).find((x) => !tried.has(`${fp}:${x.label}`)));
+      if (!b) break;
+      tried.add(`${fp}:${b.label}`);
+      log('INFO', `intro.skip tap "${clip(b.label)}"${consent ? ' (cookie banner · accept)' : ''}`);
+      await tapEl(b);
+      await settle(1.5);
+      taps++;
+    }
+    return { taps, first };
+  }
+
+  async function skipIntro() {
+    let prev = null;
+    let total = 0;
+    for (let round = 1; round <= 4; round++) {
+      const { taps, first } = await throughIntro();
+      total += taps;
+      if (taps === 0 || first === prev) break; // opens the same way as last time: nothing left
+      prev = first;
+    }
+    log('INFO', `intro.skip done · ${total} tap${total === 1 ? '' : 's'} · restarting the app for the crawl`);
+    atlas.meta.introTaps = total;
   }
 
   // First start: optional manual preparation, otherwise dismiss whatever covers the start screen.
   async function start() {
+    const { mode, inherited } = introMode();
+    atlas.meta.intro = mode;
+    if (inherited) log('INFO', `intro ${mode} · like the baseline of this app`);
+    if (mode === 'fresh') await resetApp();
+    if (mode === 'skip') await skipIntro();
     await driver.launch();
     await sleep(c.launchMs);
-    let o = await ensureAuth(await observe());
+    let o = await ensureAuth(await observeSettled());
     if (c.prepare) {
       await manual('Bring the app to the screen where the crawl should start, then continue.', 'prepare');
-      o = await ensureAuth(await observe());
-    } else o = await dismissInterstitials(o, null, 'start');
+      o = await ensureAuth(await observeSettled());
+    } else if (atlas.meta.intro !== 'fresh') o = await dismissInterstitials(o, null, 'start'); // fresh: the intro is what you want to see
     rootApp = appLabel(o.els);
     return o;
   }
@@ -327,29 +610,138 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
   async function relaunch(targets) {
     await driver.launch();
     await sleep(c.launchMs);
-    let o = await ensureAuth(await observe());
+    let o = await ensureAuth(await observeSettled());
     const hit = (x) => targets.some((t) => is(x, t));
+    if (hit(o)) return o;
+    // Apps that remember where they were (iOS Settings) open on that screen again: a screen
+    // with a back button. Back to the path, rather than taking it for a new launch screen
+    // (an intro shown once ends on a screen without a back button).
+    for (let i = 0; i < 4 && !hit(o) && !is(o, entry); i++) {
+      const k = known(o);
+      const back = !k?.oneTime && o.els.find((e) => /button/i.test(e.type) && (e.back || /^(back|zurück)$/i.test(e.label)));
+      if (!back) break;
+      if (i === 0) log('INFO', `opened on ${k ? `${k.id} "${clip(k.name, 40)}"` : `"${clip(nameOf(o.els, screenSize(o.els)), 40)}"`} · it remembers where it was · going back`);
+      const before = o;
+      await tapEl(back);
+      await settle();
+      o = await observeSettled();
+      if (o.fp === before.fp) break;
+    }
     if (hit(o)) return o;
     o = await dismissInterstitials(o, hit, 'after launch');
     if (!hit(o) && isConsent(o.els)) {
       if (c.prepare) {
         await manual('A cookie or privacy screen appeared. Decide on the device, bring the app back to the start screen, then continue.', 'prepare');
-        o = await ensureAuth(await observe());
+        o = await ensureAuth(await observeSettled());
       } else warn('cookie or privacy screen after launch · not decided automatically (decide once on the device, or use --prepare)');
     }
     return o;
   }
 
-  async function register(o, depth, pathRefs, via, parent = null) {
+  /* ---------- following the baseline ----------
+   * With a baseline for this app (and crawl.follow not false), a run repeats the baseline:
+   * its screens first, in its order, each with its actions in its order; a tap that lands
+   * somewhere else than in the baseline is tried once more after a fresh start. Only then the
+   * rest is explored. Each screen keeps the baseline screen it matches (s.base), the diff uses it. */
+  let follow = null;
+  const akey = (a) => `${a.type}:${a.label}`;
+  const pathKeyOf = (refs) => refs.map((r) => `${r.type}:${r.id || r.label}`).join(' > ');
+  const usedBase = new Set();
+  // per screen: its action (by akey) → the baseline action it is, by label or by place
+  const pairOf = new Map();
+  const pairFor = (s, act) => pairOf.get(s.id)?.get(akey(act)) || null;
+  function loadFollow() {
+    if (c.follow === false) return;
+    const id = store.baselineFor?.(compareApp);
+    if (!id) return;
+    let b;
+    try {
+      b = store.readRun(id);
+    } catch {
+      return;
+    }
+    const screens = (b.screens || []).filter((x) => !x.crash);
+    if (!screens.length) return;
+    // the order in which the baseline explored its screens (meta.order), else the order it found them
+    const explored = b.meta?.order || [];
+    const index = new Map(screens.map((x, i) => [x.id, explored.includes(x.id) ? explored.indexOf(x.id) : explored.length + i]));
+    follow = { id, screens, byId: new Map(screens.map((x) => [x.id, x])), index, edges: b.edges || [] };
+    atlas.meta.followed = id;
+    log('INFO', `follow baseline ${id} · its ${screens.length} screens first, in its order`);
+  }
+  // Where the baseline went with this action from this screen.
+  function expected(s, act) {
+    if (!follow || !s?.base) return null;
+    const was = pairFor(s, act)?.base || act; // a renamed button: where its old label led
+    const e = follow.edges.find((x) => x.from === s.base && akey(x.action) === akey(was));
+    return e ? follow.byId.get(e.to) || null : null;
+  }
+  // The baseline screen o is: where the baseline's tap led, the same path, or the most similar.
+  function matchBase(o, pathRefs, parent, act) {
+    if (!follow) return null;
+    const free = (b) => b && !usedBase.has(b.id);
+    const exp = parent && act ? expected(parent, act) : null;
+    // where the baseline's tap led, possibly changed: the same tolerance as for a second try
+    if (free(exp) && score(o, exp) >= threshold * 0.75) return exp;
+    const pk = pathKeyOf(pathRefs);
+    const byPath = follow.screens.find((b) => free(b) && !b.oneTime && pathKeyOf(b.path || []) === pk && score(o, b) > 0);
+    if (byPath) return byPath;
+    let best = null;
+    let top = threshold;
+    for (const b of follow.screens) {
+      if (!free(b)) continue;
+      const v = score(o, b);
+      if (v >= top) [best, top] = [b, v];
+    }
+    return best;
+  }
+
+  async function register(o, depth, pathRefs, via, parent = null, base = null) {
     const size = screenSize(o.els);
     const id = `s${String(atlas.screens.length).padStart(3, '0')}`;
     const file = `screens/${id}.png`;
-    await driver.screenshot(path.join(dir, file));
+    const shot = path.join(dir, file);
+    await driver.screenshot(shot);
+    // A picture that differs between runs only by timing is noise in every comparison. It is kept
+    // once a second picture a moment later agrees with it and it shows no scroll bar (iOS shows a
+    // list's scroll bar for a moment when the list appears or grows). This also waits out the
+    // last points of a sheet sliding in and system colors fading. A screen that never stands
+    // still (an animation) keeps its last picture, after about 3 s.
+    for (let i = 0; i < 6 && c.settleMs > 0; i++) {
+      const bar = fileHasScrollBar(shot, size?.w);
+      await sleep(bar ? 500 : 200);
+      const again = `${shot}.next.png`;
+      await driver.screenshot(again);
+      const still = !bar && comparePng(shot, again, null, { threshold: cfg.diff.threshold, minChangedRatio: Infinity }).ratio < cfg.diff.minChangedRatio;
+      fs.renameSync(again, shot);
+      if (still) break;
+    }
     const consent = isConsent(o.els);
-    const { actions, blocked, web } = consent ? { actions: [], blocked: [], web: [] } : actionsOf(o.els, size, c.blocklist, { webLinks: c.webLinks });
+    // with --intro skip or fresh you asked for cookie banners to be accepted: the banner is
+    // kept as a screen whose only action is accepting it
+    const yes = consent && autoConsent() ? consentAccept(o.els) : null;
+    const { actions, blocked, web, limited } = yes ? { actions: [{ type: yes.type, label: yes.label, id: yes.id, x: center(yes).x, y: center(yes).y, tier: 'nav' }], blocked: [], web: [], limited: 0 } : consent ? { actions: [], blocked: [], web: [], limited: 0 } : actionsOf(o.els, size, c.blocklist, { webLinks: c.webLinks, prefer: [].concat(c.prefer || []), maxPerList: Number(c.maxPerList) || 0 });
     if (depth < c.maxDepth) prog.total += actions.length;
-    const s = { id, name: uniqueName(names, nameOf(o.els, size, via)), fp: o.fp, sig: o.sig, depth, path: pathRefs, parent, screenshot: file, elements: o.els.length, size, actions, blocked };
+    let paired = null;
+    if (base) {
+      // each action is paired with the baseline's by label or by place (renamed, moved);
+      // the baseline's order first, actions it did not have after them
+      paired = pairActions(actions, size, base.actions || [], base.size);
+      const byKey = new Map(paired.pairs.map((p) => [akey(p.cur), p]));
+      const order = new Map((base.actions || []).map((a, i) => [a, i]));
+      const rank = (a) => order.get(byKey.get(akey(a))?.base) ?? 1e9;
+      actions.sort((a, b) => rank(a) - rank(b));
+      pairOf.set(id, byKey);
+    }
+    // what the screen says, for comparisons in words (what an agent reads instead of pixels)
+    const texts = [...new Set(o.els.filter((e) => !e.web && !/^(application|window|other)$/i.test(e.type)).map((e) => clip(String(e.label || e.value || '').replace(/\s+/g, ' ').trim(), 80)).filter(Boolean))].slice(0, 120);
+    const s = { id, name: uniqueName(names, nameOf(o.els, size, via)), fp: o.fp, sig: o.sig, depth, path: pathRefs, parent, screenshot: file, elements: o.els.length, size, actions, blocked, texts };
+    if (base) {
+      s.base = base.id;
+      usedBase.add(base.id);
+    }
     if (consent) s.consent = true;
+    if (limited) s.limited = limited;
     atlas.screens.push(s);
     byFp.set(o.fp, s);
     byId.set(id, s);
@@ -357,6 +749,11 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
     log('INFO', `screen.new ${id} "${s.name}" · ${o.els.length} elements · ${actions.length} actions · depth ${depth}`);
     for (const b of blocked) log('WARN', `action.skip "${b}" (blocklist)`);
     for (const w of web) log('STEP', `action.skip "${clip(w)}" (web link)`);
+    if (limited) log('STEP', `action.skip ${limited} more list item${limited === 1 ? '' : 's'} (max ${c.maxPerList} per list)`);
+    for (const p of paired?.pairs.filter((x) => x.hint) || []) {
+      if (p.kind === 'renamed') log('INFO', `follow ${id} "${clip(p.base.label)}" is now "${clip(p.cur.label)}" · same place · tapped as in the baseline`);
+      else log('INFO', `follow ${id} "${clip(p.cur.label)}" moved · ${describeMove({ dx: Math.round(p.cur.x - p.base.x), dy: Math.round(p.cur.y - p.base.y) })} · tapped as in the baseline`);
+    }
     event('screen', { id, name: s.name, depth, screenshot: file, elements: s.elements });
     return s;
   }
@@ -395,7 +792,7 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
     miss = miss?.key === key ? { key, n: miss.n + 1 } : { key, n: 1 };
     if (miss.n < 2) return;
     miss = null;
-    const next = k || (await register(o, 0, [], null, null));
+    const next = k || (await register(o, 0, [], null, null, matchBase(o, [], null, null)));
     const cut = next.path.length;
     let n = 0;
     for (const s of atlas.screens) {
@@ -413,35 +810,62 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
     save();
   }
 
-  // Bring the app to screen s: stay, go back one level, or relaunch and replay the path from the
-  // deepest screen of it that is showing. Every step is checked by similarity; a step that lands
-  // elsewhere gets the dismiss treatment; a failed replay is retried once from a fresh start.
-  async function goTo(s) {
-    if (s.oneTime) return null;
-    let o = await observe();
-    if (is(o, s)) return o;
-    const back = o.els.find((e) => /button/i.test(e.type) && BACK.test(e.label));
-    if (back) {
-      await tapEl(back);
+  // From screens[k] (on screen now) along the taps to the last of screens. Every step is
+  // checked by similarity; a step that lands elsewhere gets the dismiss treatment.
+  async function replayFrom(o, steps, k) {
+    for (let i = k + 1; i < steps.length; i++) {
+      const p = locate(o.els, steps[i].path.at(-1));
+      await driver.tap(p.x, p.y);
       await settle();
-      o = await observe();
+      o = await ensureAuth(await observeSettled());
+      if (!is(o, steps[i])) o = await dismissInterstitials(o, (x) => is(x, steps[i]), 'replay');
+      if (!is(o, steps[i])) return { o, ok: false };
+    }
+    return { o, ok: true };
+  }
+  const deepest = (o, steps) => {
+    for (let j = steps.length - 1; j >= 0; j--) if (is(o, steps[j])) return j;
+    return -1;
+  };
+
+  // Bring the app to screen s. Without a restart first: stay, or from the screen that is
+  // showing, or after going back up to 3 times, follow the path from a screen on it (the
+  // screens from the entry point to s). Else relaunch and replay the path from the deepest
+  // screen of it that is showing; a failed replay is retried once from a fresh start.
+  // fresh: always restart (a second try of a tap that led elsewhere).
+  async function goTo(s, { fresh = false } = {}) {
+    if (s.oneTime) return null;
+    const steps = chain(s);
+    let o = await current();
+    if (!fresh) {
       if (is(o, s)) return o;
+      for (let backs = 0; backs <= 3; backs++) {
+        const k = deepest(o, steps);
+        if (k >= 0) {
+          const r = await replayFrom(o, steps, k);
+          if (r.ok) {
+            log('STEP', `replay ${s.id} ok · from ${steps[k].id} without a restart`);
+            return r.o;
+          }
+          break; // off the path: restart
+        }
+        const back = backs < 3 && o.els.find((e) => /button/i.test(e.type) && isBack(e));
+        if (!back) break;
+        const before = o;
+        await tapEl(back);
+        await settle();
+        o = await observeSettled();
+        if (is(o, s)) return o;
+        if (o.fp === before.fp) break; // going back did nothing: restart
+      }
     }
     for (let attempt = 1; attempt <= 2; attempt++) {
-      o = await relaunch(chain(s));
+      o = await relaunch(steps);
       await checkEntry(o);
       if (s.oneTime) return null;
-      const steps = chain(s);
-      let k = -1;
-      for (let j = steps.length - 1; j >= 0 && k < 0; j--) if (is(o, steps[j])) k = j;
-      for (let i = k + 1; k >= 0 && i < steps.length; i++) {
-        const p = locate(o.els, steps[i].path.at(-1));
-        await driver.tap(p.x, p.y);
-        await settle();
-        o = await ensureAuth(await observe());
-        if (!is(o, steps[i])) o = await dismissInterstitials(o, (x) => is(x, steps[i]), 'replay');
-        if (!is(o, steps[i])) break;
-      }
+      const path = chain(s); // the entry point may have moved
+      const k = deepest(o, path);
+      if (k >= 0) o = (await replayFrom(o, path, k)).o;
       const m = score(o, s);
       if (m >= threshold) {
         log('STEP', `replay ${s.id} ok · match ${m.toFixed(2)}`);
@@ -466,27 +890,78 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
     } catch {}
     log('INFO', `app.launch ${atlas.meta.appName ? atlas.meta.appName + ' · ' : ''}${cfg.app.bundleId}`);
     event('run', { id: runId, device: atlas.meta.device });
+    if (c.against) {
+      const id = store.baselineFor?.(c.against);
+      if (!id) throw new Error(`no baseline for ${c.against} · crawl it first (or both at once: crawl --bundle ${c.against} --then ${cfg.app.bundleId})`);
+      Object.assign(atlas.meta, { against: c.against, baseline: id });
+      log('INFO', `compared with the baseline of ${c.against} · ${id}`);
+    }
 
-    root = await register(await start(), 0, [], null);
+    loadFollow();
+    const first = await start();
+    root = await register(first, 0, [], null, null, matchBase(first, [], null, null));
     entry = root;
-    if (root.consent) warn(`the start screen asks for a cookie or privacy decision · not decided automatically. Decide once on the device, or crawl with --prepare`);
+    if (root.consent && !root.actions.length) warn(`the start screen asks for a cookie or privacy decision · not decided automatically. Decide once on the device, or crawl with --prepare`);
+    // Level by level (breadth-first). Within a level, screens reached through navigation are
+    // explored before those reached through buttons, and those before list items.
     const queue = [root];
-    const limit = () => atlas.screens.length >= c.maxScreens || Date.now() > deadline || io.aborted?.();
+    const reachedBy = new Map(); // screen id → tier of the action that found it
+    const rankOf = (x) => TIERS.indexOf(reachedBy.get(x.id) || 'nav');
+    // following a baseline: its screens first, in its order; then the rest
+    const order = (x) => (x.base && follow ? [0, follow.index.get(x.base)] : [1, x.depth, rankOf(x)]);
+    const before = (a, b) => {
+      const [x, y] = [order(a), order(b)];
+      for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) < (y[i] ?? 0);
+      return false;
+    };
+    const next = () => {
+      let b = 0;
+      for (let i = 1; i < queue.length; i++) if (before(queue[i], queue[b])) b = i;
+      return queue.splice(b, 1)[0];
+    };
+    // Tabs are tapped once per run: the first time shows where each one leads, after that
+    // the same tab on another screen only gets the known transition, without a tap.
+    const tabs = new Map(); // tabKey → id of the screen it leads to, or null
+    let tabsSaved = 0;
+    // The screen limit: following a baseline, its screens are always visited; the limit
+    // applies to everything new.
+    const full = () => atlas.screens.length >= c.maxScreens;
+    const over = () => Date.now() > deadline || io.aborted?.();
+    let skippedNew = 0;
 
     outer: while (queue.length) {
-      const s = queue.shift();
+      const s = next();
       if (s.depth >= c.maxDepth) continue;
+      (atlas.meta.order ||= []).push(s.id); // the exploration order, for a run that follows this one
+      if (full() && !(follow && s.base)) {
+        log('WARN', 'limit reached · stopping');
+        atlas.meta.stopped = 'screens';
+        break;
+      }
       if (s.oneTime) {
         prog.done += s.actions.length; // never shown again, nothing left to try
         progress();
         continue;
       }
       for (const [i, act] of s.actions.entries()) {
-        if (limit()) {
+        if (over() || (full() && !follow)) {
           log('WARN', 'limit reached · stopping');
+          atlas.meta.stopped = over() ? 'time' : 'screens';
           break outer;
         }
+        if (full() && !expected(s, act)) {
+          prog.done++; // screen limit: only the baseline's way on
+          continue;
+        }
         prog.t0 ??= Date.now();
+        if (act.tab && tabs.has(tabKey(act))) {
+          const to = byId.get(tabs.get(tabKey(act)));
+          if (to && to !== s) addEdge(s, to, act);
+          tabsSaved++;
+          prog.done++;
+          progress();
+          continue;
+        }
         const o = await goTo(s);
         if (!o) {
           prog.done += s.actions.length - i; // the rest of this screen is given up
@@ -496,15 +971,17 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
         prog.done++;
         progress();
         const p = locate(o.els, act);
-        log('STEP', `tap "${act.label || act.type}" on ${s.id}`);
+        log('STEP', `tap "${clip(act.label || act.type, 60)}" on ${s.id}`);
+        if (act.tab) tabs.set(tabKey(act), null);
         event('tap', { screen: s.id, x: p.x, y: p.y, size: s.size });
         await driver.tap(p.x, p.y);
-        await settle();
 
-        const state = await appState();
+        // still the app's own screen: neither crashed nor left, no need to ask for the app state
+        let n = await afterTap(o);
+        const state = rootApp && appLabel(n.els) === rootApp ? 4 : await appState();
         if (state !== 4 && state > 1) {
           // Safari or another app came to the front: note it, go back, register nothing
-          warn(`left app after tap "${act.label || act.type}" on ${s.id} · returning`);
+          warn(`left app after tap "${clip(act.label || act.type, 60)}" on ${s.id} · returning`);
           await (driver.activate ? driver.activate() : driver.launch());
           await settle();
           continue;
@@ -520,31 +997,78 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
             event('screen', { id: cs.id, name: cs.name, depth: cs.depth, crash: true });
           }
           addEdge(s, cs, act);
-          log('ERROR', `app.crash after tap "${act.label || act.type}" on ${s.id}`);
+          log('ERROR', `app.crash after tap "${clip(act.label || act.type, 60)}" on ${s.id}`);
           save();
           continue;
         }
 
-        const n = await ensureAuth(await observe());
+        n = await ensureAuth(n);
+        // the baseline went somewhere else with this tap: once more, after a fresh start
+        const exp = expected(s, act);
+        const hitsExp = (x) => {
+          const k = known(x);
+          // the expected screen, possibly changed (a new button, other texts): no second try
+          return k ? k.base === exp.id : score(x, exp) >= threshold * 0.75;
+        };
+        // a button that only shares the place with the baseline's (renamed) may well be another
+        // button: where it leads is kept as it is, no second try
+        const renamed = pairFor(s, act)?.kind === 'renamed';
+        if (exp && renamed) log('INFO', hitsExp(n) ? `"${clip(act.label)}" on ${s.id} leads where "${clip(pairFor(s, act).base.label)}" led · the same button, renamed` : `"${clip(act.label)}" on ${s.id} leads elsewhere than "${clip(pairFor(s, act).base.label)}" did · another button at the same place`);
+        // the baseline's screen may only be slow to come (the app asks its server first): a while
+        // longer before calling it a different place
+        for (const t0 = Date.now(); exp && !renamed && exp.id !== s.base && !hitsExp(n) && Date.now() - t0 < c.settleMs * 2.5; ) {
+          await sleep(c.settleMs / 3);
+          n = await ensureAuth(await observeSettled());
+        }
+        if (exp && !renamed && exp.id !== s.base && !hitsExp(n)) {
+          log('INFO', `tap "${clip(act.label || act.type)}" on ${s.id} led elsewhere than in the baseline ("${exp.name}") · once more after a fresh start`);
+          const o2 = await goTo(s, { fresh: true });
+          if (o2) {
+            const p2 = locate(o2.els, act);
+            await driver.tap(p2.x, p2.y);
+            const n2 = await afterTap(o2);
+            if ((rootApp && appLabel(n2.els) === rootApp) || (await appState()) === 4) {
+              n = await ensureAuth(n2);
+              log('INFO', hitsExp(n) ? `retry on ${s.id} · as in the baseline` : `retry on ${s.id} · different again, kept as it is`);
+            }
+          }
+        }
         if (rootApp && appLabel(n.els) && appLabel(n.els) !== rootApp) {
-          warn(`left app after tap "${act.label || act.type}" on ${s.id} (${appLabel(n.els)} in front) · returning`);
+          warn(`left app after tap "${clip(act.label || act.type, 60)}" on ${s.id} (${appLabel(n.els)} in front) · returning`);
           await (driver.activate ? driver.activate() : driver.launch());
           await settle();
           continue;
         }
-        if (is(n, s)) continue; // tap did not navigate (or only changed content)
+        if (is(n, s)) {
+          if (act.tab) tabs.set(tabKey(act), s.id); // the tab of this screen
+          continue; // tap did not navigate (or only changed content)
+        }
         let t = known(n);
-        if (!t && isConsent(n.els)) {
-          warn(`cookie or privacy screen after tap "${act.label || act.type}" on ${s.id} · skipped, not decided automatically`);
+        if (!t && isConsent(n.els) && !(autoConsent() && consentAccept(n.els))) {
+          warn(`cookie or privacy screen after tap "${clip(act.label || act.type, 60)}" on ${s.id} · skipped, not decided automatically`);
           continue;
         }
         if (!t) {
-          t = await register(n, s.depth + 1, [...s.path, refOf(act)], act.label, s.id);
+          const refs = [...s.path, refOf(act)];
+          const base = matchBase(n, refs, s, act);
+          if (follow && !base && full()) {
+            skippedNew++; // a new screen, but the limit is reached: the baseline's screens first
+            continue;
+          }
+          t = await register(n, s.depth + 1, refs, act.label, s.id, base);
+          reachedBy.set(t.id, act.tier);
           queue.push(t);
         }
+        if (act.tab) tabs.set(tabKey(act), t.id);
         addEdge(s, t, act);
       }
     }
+    if (skippedNew) log('INFO', `${skippedNew} new screen${skippedNew === 1 ? '' : 's'} not kept · screen limit reached, the baseline's screens came first`);
+    if (follow) {
+      const missing = follow.screens.filter((b) => !usedBase.has(b.id) && !b.oneTime).length;
+      log('INFO', `baseline followed · ${usedBase.size} of ${follow.screens.length} screens found again${missing ? ` · ${missing} not reached` : ''}`);
+    }
+    if (tabsSaved) log('INFO', `tabs tapped once each · ${tabsSaved} repeated tab tap${tabsSaved === 1 ? '' : 's'} saved`);
     atlas.meta.status = 'done';
     progress(true);
   } catch (e) {
@@ -556,6 +1080,8 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
     atlas.meta.durationMs = Date.now() - started;
     save();
   }
+  const once = atlas.screens.filter((s) => s.oneTime).length;
+  if (once && atlas.meta.intro === 'keep') log('INFO', `${once} one-time screen${once === 1 ? '' : 's'} (app intro) · a later run will not see ${once === 1 ? 'it' : 'them'} · --intro fresh shows the intro in every run, --intro skip leaves it out`);
   const crashes = atlas.screens.filter((s) => s.crash).length;
   if (atlas.meta.status === 'done') log('DONE', `crawl.done ${atlas.screens.length - crashes} screens · ${atlas.edges.length} transitions · ${crashes} crashes · run ${runId}`);
   event('done', { id: runId, status: atlas.meta.status });

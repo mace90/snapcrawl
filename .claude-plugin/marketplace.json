@@ -1,0 +1,14 @@
+{
+  "name": "snappcrawl",
+  "description": "snappcrawl: crawl iOS apps and catch regressions, for Claude Code",
+  "owner": { "name": "Matthaeus Ceglarek", "url": "https://github.com/mace90" },
+  "plugins": [
+    {
+      "name": "snappcrawl",
+      "source": "./",
+      "description": "Check iOS apps after every change: crawl them in the Simulator, compare every screen with the baseline.",
+      "category": "testing",
+      "tags": ["ios", "simulator", "visual-regression", "mcp"]
+    }
+  ]
+}

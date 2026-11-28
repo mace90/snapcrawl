@@ -1,0 +1,17 @@
+{
+  "name": "snappcrawl",
+  "displayName": "snappcrawl",
+  "version": "0.4.0",
+  "description": "Check iOS apps after every change: crawl them in the Simulator, compare every screen with the baseline (pixels, texts, buttons, navigation, crashes).",
+  "author": { "name": "Matthaeus Ceglarek", "url": "https://github.com/mace90" },
+  "homepage": "https://github.com/mace90/snappcrawl",
+  "repository": "https://github.com/mace90/snappcrawl",
+  "license": "MIT",
+  "keywords": ["ios", "simulator", "xcode", "swiftui", "visual-regression", "ui-testing", "mcp"],
+  "mcpServers": {
+    "snappcrawl": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/snappcrawl.js", "mcp"]
+    }
+  }
+}

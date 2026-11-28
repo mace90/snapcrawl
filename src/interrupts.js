@@ -50,3 +50,31 @@ export function alertFromElements(els) {
 
 // Links (in web views and web content) usually open Safari or another site.
 export const isWebLink = (e) => /^link$/i.test(e.type);
+
+/* ---------- getting through an app intro (--intro skip) ---------- */
+
+// Only with --intro skip, which you choose: there the crawler decides for you, so cookie
+// banners are accepted and buttons that lead through the intro are tapped.
+const CONSENT_YES = /(alle akzeptieren|akzeptieren|accept all|accept|alle zulassen|allow all|zustimmen|agree|einverstanden)/i;
+const CONSENT_NOT = /(nicht|ablehn|reject|decline|deny|verweiger|einstellung|settings|manage|verwalten|anpassen|option|mehr erfahren|learn more)/i;
+// skipping first, then going on, then closing hints
+const INTRO_SKIP = /^(skip|überspringen|skip intro|intro überspringen|alle überspringen|skip all)$/i;
+const INTRO_NEXT = /^(weiter|fortfahren|continue|next|nächste|los geht's|loslegen|jetzt loslegen|get started|let's go|start|starten|jetzt starten|fertig|done|erlauben|allow|aktivieren|enable|turn on|einschalten)$/i;
+
+const buttonsOf = (els) => els.filter((e) => /^button$/i.test(e.type) && e.enabled !== false && e.w > 0 && e.h > 0 && !e.web && e.label);
+
+export function consentAccept(els) {
+  if (!isConsent(els)) return null;
+  return buttonsOf(els).find((e) => CONSENT_YES.test(q(e.label)) && !CONSENT_NOT.test(q(e.label))) || null;
+}
+
+// Candidates on an intro screen, best first. Exact labels only, never blocklisted ones.
+export function introButtons(els, { dismiss = DEFAULT_DISMISS, blocklist = [] } = {}) {
+  const words = new Set(dismiss.map(q));
+  const ok = buttonsOf(els).filter((e) => !blocklist.some((b) => q(e.label).includes(q(b))) && !DECISION.test(e.label));
+  return [
+    ...ok.filter((e) => INTRO_SKIP.test(q(e.label))),
+    ...ok.filter((e) => INTRO_NEXT.test(q(e.label))),
+    ...ok.filter((e) => words.has(q(e.label))),
+  ].filter((e, i, all) => all.indexOf(e) === i);
+}
