@@ -226,7 +226,7 @@ permissions:
   pull-requests: write
 jobs:
   ui:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
         with:

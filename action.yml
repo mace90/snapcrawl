@@ -66,7 +66,14 @@ runs:
       run: |
         brew tap facebook/fb >/dev/null
         brew trust facebook/fb >/dev/null 2>&1 || true   # newer Homebrew refuses untrusted taps
-        brew install idb-companion >/dev/null
+        if ! brew install idb-companion >/dev/null; then
+          # it compiles with Xcode 26: select an installed one when an older Xcode is active
+          x=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$x" ] || { echo "::error::idb-companion needs Xcode 26 · use runs-on: macos-26"; exit 1; }
+          echo "selecting $x for idb-companion"
+          sudo xcode-select -s "$x/Contents/Developer"
+          brew install idb-companion >/dev/null
+        fi
         command -v pipx >/dev/null || brew install pipx >/dev/null
         pipx install fb-idb >/dev/null
         export PATH="$HOME/.local/bin:$PATH"
