@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { signature, similarity } from './signature.js';
+import { signature, similarity, tabsOf } from './signature.js';
 import { DEFAULT_DISMISS, alertFromElements, consentAccept, dismissButton, introButtons, isConsent, isPermissionAlert, isWebLink, pickButton } from './interrupts.js';
 import { totp } from './totp.js';
 import { describeMove, pairActions } from './pairing.js';
@@ -31,7 +31,8 @@ const clip = (s, n = 32) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
  * Only a screen that is nothing but web content is identified by it.
  */
 export function fingerprint(els) {
-  const part = (e) => (isText(e) ? 't:' + norm(e.label).slice(0, 40) : `${e.type}:${e.id || norm(e.label)}`);
+  const tabs = tabsOf(els); // by place, like in the signature
+  const part = (e) => (e.tab ? `Tab:#${tabs.indexOf(e) + 1}` : isText(e) ? 't:' + norm(e.label).slice(0, 40) : `${e.type}:${e.id || norm(e.label)}`);
   const relevant = els.filter((e) => !/^(application|window|other|webview)$/i.test(e.type));
   const own = relevant.filter((e) => !e.web);
   const parts = (own.length ? own : relevant).map(part);
@@ -45,12 +46,15 @@ function screenSize(els) {
 
 /**
  * A readable screen name, ignoring web content:
- * navigation bar title → selected tab → first large text near the top → the action that led here.
+ * navigation bar title → a heading at the top → selected tab → first large text near the top → the action that led here.
  */
 export function nameOf(els, size, via) {
   const own = els.filter((e) => !e.web);
   const nav = own.find((e) => /navigationbar/i.test(e.type) && (e.label || e.id));
   if (nav) return clip(nav.label || nav.id);
+  // iOS 26 lists a SwiftUI navigation title as a heading, not inside a navigation bar
+  const heading = own.find((e) => /^heading$/i.test(e.type) && !e.tab && e.label.length > 1 && e.label.length <= 40 && e.y < size.h * 0.25);
+  if (heading) return clip(heading.label);
   const tab = own.find((e) => e.tab && e.selected && e.label);
   if (tab) return clip(tab.label);
   const texts = own

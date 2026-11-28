@@ -22,6 +22,8 @@ import { startMcp } from '../src/mcp.js';
 import { EXIT, summarize, summaryMarkdown } from '../src/summary.js';
 import { baselineLimits, checkResult } from '../src/check.js';
 import { initAgents } from '../src/agents.js';
+import { buildApp, buildRef, installApp } from '../src/build.js';
+import { junitXml } from '../src/junit.js';
 import { setup } from '../src/setup.js';
 import { Store } from '../src/store.js';
 import * as t from '../src/term.js';
@@ -99,9 +101,16 @@ ${t.bold('Crawl options')}
   --max-per-list <n>          only the first n cells of each list (default: all)
   --diff                      compare against the baseline when done
 
+${t.bold('Build from Xcode')} ${t.gray('(check and crawl, simulator)')}
+  --build                     build the app in this folder for the Simulator, install it, then crawl
+  --base-ref <git ref>        also build that state (e.g. main) in a temporary worktree and crawl it first
+                              as the baseline: compares your working tree with it, nothing else needed
+  --project <path>  --scheme <name>  --configuration <Debug|Release>  --set KEY=VALUE (build setting)
+
 ${t.bold('For agents and CI')}
   --json                      check, diff, runs, apps, devices, doctor: one JSON document on stdout, the log on stderr
   --markdown                  diff: the result as Markdown (a PR comment, a CI summary)
+  --junit <file>              check, diff: one JUnit test case per screen (on GitHub Actions the job summary is written too)
   --no-input                  never wait for a person (automatic without a terminal or with CI set): exit 3
   mcp                         MCP server on stdio for coding agents (Claude Code, Codex, Copilot, Cursor …)
   init --agents               tell the agents in this repository about snappcrawl (AGENTS.md, CLAUDE.md, .mcp.json …)
@@ -155,6 +164,13 @@ const { values: opt, positionals: pos } = parseArgs({
     markdown: { type: 'boolean' },
     'no-input': { type: 'boolean' },
     agents: { type: 'boolean' },
+    build: { type: 'boolean' },
+    'base-ref': { type: 'string' },
+    project: { type: 'string' },
+    scheme: { type: 'string' },
+    configuration: { type: 'string' },
+    set: { type: 'string', multiple: true },
+    junit: { type: 'string' },
   },
 });
 
@@ -199,11 +215,18 @@ function finishCheck(atlas, pair) {
     return;
   }
   process.exitCode = EXIT[r.verdict];
+  writeCiFiles(r, pair?.report || store.readReport(r.base.run, r.head.run));
   if (opt.json) return emit(r);
   printReport(pair?.report || store.readReport(r.base.run, r.head.run));
   say(`  ${{ passed: t.green, changes: t.yellow, broken: t.red, failed: t.red }[r.verdict](r.verdict)}`);
   for (const n of r.next) say(`  ${t.gray('·')} ${n}`);
   say();
+}
+
+// --junit <file>; on GitHub Actions the Markdown result goes to the job summary by itself
+function writeCiFiles(r, report) {
+  if (opt.junit) fs.writeFileSync(opt.junit, junitXml(r, report));
+  if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summaryMarkdown(r) + '\n');
 }
 
 const RESULT = { passed: t.green, failed: t.red, 'in review': t.yellow };
@@ -330,6 +353,20 @@ const commands = {
   },
 
   async crawl() {
+    // --build / --base-ref: build from the Xcode project first (both builds before any crawl,
+    // so a build error stops it early); the bundle id comes from the build
+    let built = null;
+    let baseBuilt = null;
+    if (opt.build || opt['base-ref']) {
+      const b = { project: opt.project, scheme: opt.scheme, configuration: opt.configuration || 'Debug', settings: [].concat(opt.set || []), log: t.logLine };
+      if (opt.then) throw expected('--build crawls one app · with two builds side by side install them, then use --then');
+      built = await buildApp(b);
+      if (opt['base-ref']) {
+        baseBuilt = await buildRef({ ...b, ref: opt['base-ref'] });
+        if (baseBuilt.bundleId !== built.bundleId) throw expected(`${opt['base-ref']} builds ${baseBuilt.bundleId}, the working tree ${built.bundleId} · compare them with --then after installing both`);
+      }
+      cfg.app.bundleId = opt.bundle || built.bundleId;
+    }
     cfg.app.bundleId = opt.bundle || cfg.app.bundleId;
     if (!cfg.app.bundleId) throw expected(`no app given · --bundle com.example.app or app.bundleId in ${LOCAL_FILE} (snappcrawl apps lists bundle ids)`);
     // check: the limits of the baseline unless given, so none of its screens is out of reach
@@ -410,6 +447,21 @@ const commands = {
     let atlas;
     let pair = null;
     try {
+      if (built) {
+        if (driver.platform !== 'ios-sim') throw expected('--build installs on a simulator · for an iPhone install the build with Xcode, then crawl');
+        await driver.resolve();
+        if (baseBuilt) {
+          // the other git state first, as the baseline
+          await installApp(driver.udid, baseBuilt.app);
+          t.logLine('INFO', `installed ${opt['base-ref']} · crawling it as the baseline`);
+          const a = await crawl({ driver, cfg: structuredClone(cfg), store, io, label: opt['base-ref'].replace(/[^\w.-]+/g, '-') });
+          if (a.meta.status !== 'done') throw expected(`the crawl of ${opt['base-ref']} did not finish · ${a.meta.error || ''}`);
+          store.setBaseline(a.meta.id);
+          t.logLine('INFO', `baseline of ${cfg.app.bundleId} is now ${a.meta.id} (${opt['base-ref']})`);
+        }
+        await installApp(driver.udid, built.app);
+        t.logLine('INFO', `installed the working tree's build · ${path.basename(built.app)}`);
+      }
       if (opt.then) {
         pair = await crawlPair({ driverFor: (bundleId) => (bundleId === cfg.app.bundleId ? driver : second || makeDriver({ ...o, bundleId })), cfg, store, io, base: cfg.app.bundleId, head: opt.then, label: opt.label || '', parallel: !!second });
         atlas = pair.head || pair.base;
@@ -484,6 +536,7 @@ const commands = {
     const { base, head } = pickRuns(pos[1], pos[2]);
     let report = buildReport({ store, baseId: base, headId: head, cfg });
     if (opt.ai) report = await notes(report);
+    if (opt.junit) fs.writeFileSync(opt.junit, junitXml(summarize(report, store), report));
     if (opt.json) {
       const r = summarize(report, store);
       process.exitCode = EXIT[r.verdict];

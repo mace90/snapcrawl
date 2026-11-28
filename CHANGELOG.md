@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Build from Xcode and CI
+- `check --build` (and `crawl --build`) builds the app in the folder for the Simulator (`xcodebuild`, workspace before project, the only or the like-named scheme), installs it and takes the bundle id from the build. `--project`, `--scheme`, `--configuration`, `--set KEY=VALUE`.
+- `--base-ref <git ref>` builds that state in a temporary worktree, crawls it first as the baseline and then compares the working tree with it: a regression check of a change without keeping a baseline. MCP `check` takes `build`, `baseRef`, `dir`, `project`, `scheme`, `buildSettings`.
+- GitHub Action (`uses: mace90/snappcrawl@main`, `action.yml`): installs idb and snappcrawl from the action's own source, boots the newest iPhone simulator, builds and crawls the pull request's base and head, writes the job summary, keeps one pull request comment up to date, uploads report, JSON and JUnit, fails on `broken` (or `changes`, or `never`).
+- `--junit <file>` for `check` and `diff`: one test case per screen. On GitHub Actions `check` also appends its Markdown result to the job summary.
+- `examples/ios-demo`: a small SwiftUI app (tabs, list, detail, form, sheet) with a variant build (`-DVARIANT_B`), used by `.github/workflows/demo.yml`.
+- iOS 26 tab bars: SwiftUI lists the tab bar as one empty group. The simulator driver reads the tabs from the automation tree (and, where that names them after their symbols, at their place), with the selected tab. Before, tab apps were crawled without their tabs.
+- Tabs count by their place in a screen's identity (signature, fingerprint), not by their label: iOS 26 names a tab after its symbol in some reads (`house`) and after its title in others (`Start`), which made one screen look like two. Baselines of tab apps made before should be crawled again.
+- Screen names: a heading at the top (how iOS 26 lists a SwiftUI navigation title) comes before the selected tab.
+- `diff.threshold` is now 0.05 (was 0.1). At 0.1 a new white row on the light gray background of an iOS list measured 0.04 % and counted as unchanged; at 0.05 it is 0.13 %. Unchanged screens of the iOS Settings stay at exactly 0 either way.
+
 ### For coding agents
 - `snappcrawl mcp`: an MCP server on stdio (JSON-RPC by hand, no SDK) for Claude Code, Codex, Copilot, Cursor. Tools: `status`, `list_apps`, `install_app`, `check`, `check_status`, `stop`, `compare`, `screen` (with the pictures as images), `review`, `set_baseline`, `ignore`. Server instructions tell an agent when to check and how to read the result. A long check answers with a job id within `wait` seconds (some clients end tool calls after 60 s) and sends progress notifications.
 - `snappcrawl check`: crawl and compare with the baseline in one go; the first check saves the baseline. Exit codes: 0 passed, 1 broken or rejected, 2 changes to review, 3 needs a person, 4 setup.

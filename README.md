@@ -139,7 +139,7 @@ claude mcp add --scope user snappcrawl -- snappcrawl mcp
 |---|---|
 | `status` | setup ready? booted simulators, baselines per app, latest runs |
 | `list_apps` · `install_app` | installed apps; install a `.app` built with `xcodebuild -sdk iphonesimulator` |
-| `check` · `check_status` · `stop` | crawl and compare with the baseline. Answers within `wait` seconds (default 45), else with a job id to wait on, because some clients end a tool call after 60 s. The first check of an app saves its baseline. |
+| `check` · `check_status` · `stop` | crawl and compare with the baseline; `build: true` builds the Xcode project first, `baseRef: "main"` also builds and crawls main as the baseline. Answers within `wait` seconds (default 45), else with a job id to wait on, because some clients end a tool call after 60 s. The first check of an app saves its baseline. |
 | `compare` | the comparison of any two runs |
 | `screen` | one screen: path, texts and buttons that changed, and the head, base and diff pictures as images |
 | `review` · `set_baseline` · `ignore` | approve or reject changes, make a run the reference, leave an animation out |
@@ -173,6 +173,53 @@ claude mcp add --scope user snappcrawl -- snappcrawl mcp
 | `error` | 4 | setup problem (no simulator, app not installed …) |
 
 `check` uses the limits of the baseline unless given, so no baseline screen is out of reach; screens a run did not get to because of its own limit count as *not reached*, not as broken. A screen whose texts or buttons changed counts as changed even with the same pixels (an accessibility label, for example). Without a terminal, with `CI` set, `--json` or `--no-input` snappcrawl never waits for a person. `snappcrawl diff --markdown` prints the result for a pull request comment.
+
+## Build from Xcode, compare with main
+
+In the app's folder snappcrawl builds the app itself, for the Simulator, and installs it:
+
+```bash
+snappcrawl check --build                       # build, install, crawl, compare with the baseline
+snappcrawl check --build --base-ref main       # build main too, crawl it first as the baseline, then your working tree
+```
+
+`--base-ref` takes any git ref (a branch, a tag, a commit). It is checked out into a temporary worktree, so your working tree stays as it is; both builds have their own derived data under `.snappcrawl/`. That is the whole regression check for a change, with no baseline to keep around. Options: `--project <.xcodeproj|.xcworkspace>` when the folder has several, `--scheme`, `--configuration`, `--set KEY=VALUE` for build settings (repeatable). The bundle id comes from the build.
+
+The repository has a small SwiftUI app to try it: [`examples/ios-demo`](examples/ios-demo). `--set OTHER_SWIFT_FLAGS=-DVARIANT_B` builds a variant with a renamed button and an extra row:
+
+```bash
+cd examples/ios-demo
+snappcrawl check --build                                          # baseline
+snappcrawl check --build --set OTHER_SWIFT_FLAGS=-DVARIANT_B      # → changes: "Profil" → "Mein Profil", new "Yoga"
+```
+
+## GitHub Actions
+
+On every pull request: build the base and the change, crawl both, compare, comment the result, fail on a new crash or an unreachable screen.
+
+```yaml
+# .github/workflows/snappcrawl.yml
+name: snappcrawl
+on: pull_request
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  ui:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: mace90/snappcrawl@main
+        with:
+          working-directory: .          # where the .xcodeproj / .xcworkspace is
+          fail-on: broken               # broken | changes | never
+```
+
+The action installs idb and snappcrawl, boots the newest iPhone simulator, runs `snappcrawl check --build --base-ref <the pull request's base>`, writes the result to the job summary, keeps one pull request comment up to date, uploads the full HTML report, the JSON result and a JUnit file as an artifact, and sets the output `verdict`. Inputs: `project`, `scheme`, `configuration`, `build-settings`, `base-ref`, `simulator`, `max-screens`, `max-depth`, `minutes`, `fail-on`, `comment`. This repository runs it on the demo app in [`.github/workflows/demo.yml`](.github/workflows/demo.yml).
+
+Other CI: `snappcrawl check --build --base-ref origin/main --json --junit snappcrawl.xml` on a Mac with Xcode; the exit code says passed (0), broken (1) or changes (2), and every CI reads the JUnit file.
 
 ## Real iPhone over USB
 
@@ -530,7 +577,7 @@ Both options are also in the web UI under **Setup → Limits and interruptions**
     "fallbackManual": true
   },
   "crawl": { "maxDepth": 8, "maxScreens": 200, "timeLimitMin": 20, "blocklist": ["log out", "delete account", "buy"], "systemAlerts": "dismiss" },
-  "diff": { "threshold": 0.1, "minChangedRatio": 0.0005, "ignoreStatusBar": true }
+  "diff": { "threshold": 0.05, "minChangedRatio": 0.0005, "ignoreStatusBar": true }
 }
 ```
 
@@ -555,7 +602,7 @@ Both options are also in the web UI under **Setup → Limits and interruptions**
 | `crawl.reinstall` | | with `fresh`: a `.app` to uninstall and install before each run (`--reinstall`) |
 | `crawl.prefer` | `[]` | labels tapped before everything else, in this order (`--prefer`, see [Crawl order](#crawl-order)) |
 | `crawl.maxPerList` | `0` | only the first n cells of each list, `0` = all (`--max-per-list`) |
-| `diff.threshold` | `0.1` | per-pixel colour tolerance (0–1) |
+| `diff.threshold` | `0.05` | per-pixel colour tolerance (0–1); at 0.1 a white card on the light gray iOS background goes unnoticed |
 | `diff.minChangedRatio` | `0.0005` | share of changed pixels below which a screen counts as unchanged |
 | `diff.ignoreStatusBar` | `true` | masks the clock and battery area |
 | `diff.ignoreHomeIndicator` | `true` | masks the home indicator at the bottom, which iOS tints after the screen before |
@@ -592,7 +639,7 @@ Then `snappcrawl diff --ai`, or **Notes** in the web UI. Global settings live in
 | `snappcrawl boot <simulator>` | boot a simulator |
 | `snappcrawl apps` | apps on the simulator · `--device` for an iPhone |
 | `snappcrawl wda setup \| start \| stop \| status` | WebDriverAgent for iPhones · `--team --bundle-id --udid` |
-| `snappcrawl check` | crawl and compare with the baseline in one go, for agents and CI · `--json`, exit codes 0–4 (see [With coding agents](#with-coding-agents)) |
+| `snappcrawl check` | crawl and compare with the baseline in one go, for agents and CI · `--build --base-ref <ref> --project --scheme --set --json --junit`, exit codes 0–4 (see [With coding agents](#with-coding-agents)) |
 | `snappcrawl mcp` | MCP server on stdio for coding agents |
 | `snappcrawl init --agents` | AGENTS.md, CLAUDE.md, Copilot instructions and MCP configs for this repository |
 | `snappcrawl crawl` | explore the app · `--bundle --then --parallel --against --udid --device --label --max-depth --max-screens --minutes --mfa --prepare --alerts --dismiss --block --prefer --max-per-list --intro --reinstall --no-follow --diff` |

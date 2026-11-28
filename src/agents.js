@@ -17,9 +17,9 @@ export function agentBlock({ bundleId = '' } = {}) {
 This is an iOS app. snappcrawl crawls it in the Simulator, maps every screen and compares each one with a baseline run (pixels, texts, buttons, navigation, crashes). After changing anything a user can see or reach (views, navigation, texts, layout, assets, startup), check the app with it before you call the work done.
 
 - **MCP** (tools \`status\`, \`check\`, \`screen\`, \`review\`, \`set_baseline\`, \`ignore\`): \`check\` with \`bundleId: "${id}"\`, then look at changed screens with \`screen\`.
-- **CLI**: \`snappcrawl check --bundle ${id} --json\` · exit 0 passed, 1 broken (new crash or unreachable screen), 2 changes to review, 3 needs login data, 4 setup problem.
-- **No baseline yet**: the first check saves it. Make it from the code before your change (\`git stash\`, build, install, check, \`git stash pop\`).
-- **Build and install for the Simulator**: \`xcodebuild -scheme <Scheme> -sdk iphonesimulator -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath build\` then \`xcrun simctl install booted build/Build/Products/Debug-iphonesimulator/<App>.app\` (or pass \`appPath\` to the MCP \`check\`).
+- **CLI**: \`snappcrawl check --bundle ${id} --json\` (an app that is already installed) · exit 0 passed, 1 broken (new crash or unreachable screen), 2 changes to review, 3 needs login data, 4 setup problem.
+- **Compare your change with main in one go**: \`snappcrawl check --build --base-ref main --json\` (MCP: \`check\` with \`baseRef: "main"\`). It builds main in a temporary worktree and your working tree, crawls both in the Simulator and compares them. No setup, no baseline needed.
+- **Or keep a baseline**: \`snappcrawl check --build --json\` (MCP: \`build: true\`); the first check of an app saves the baseline, later ones compare with it.
 - **Read the result**: \`broken\` is almost always a bug you made: fix it and check again. \`changes\` lists per screen the texts that came and went and the buttons that were renamed, moved or removed: confirm each is intended (\`screen\` shows the pictures), otherwise fix it. Approve intended changes (\`review\`), and make the new state the reference (\`set_baseline\` / \`snappcrawl baseline <run>\`) only when the user agrees.
 - **Logins**: set \`SNAPPCRAWL_USERNAME\`, \`SNAPPCRAWL_PASSWORD\` (and \`SNAPPCRAWL_TOTP_SECRET\` or \`SNAPPCRAWL_PIN\`) for test accounts; never real ones.
 ${END}`;

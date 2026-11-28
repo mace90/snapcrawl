@@ -142,10 +142,18 @@ export class Companion {
     });
   }
 
-  // The same JSON as `idb ui describe-all --json`
-  async describeAll() {
-    const r = decode(await this.call('accessibility_info', [Buffer.alloc(0)]));
+  // The same JSON as `idb ui describe-all --json`. clientType: the assistive client the read
+  // claims to be (AccessibilityInfoRequest.client_type = 14), 5 = XCTest: the automation tree
+  async describeAll({ clientType = 0 } = {}) {
+    const req = clientType ? int(14, clientType) : Buffer.alloc(0);
+    const r = decode(await this.call('accessibility_info', [req]));
     return JSON.parse(r[1]?.[0]?.toString('utf8') || '[]');
+  }
+
+  // the element at a point (AccessibilityInfoRequest.point = 2), as `idb ui describe-point --json`
+  async describePoint(x, y) {
+    const r = decode(await this.call('accessibility_info', [sub(2, Buffer.concat([double(1, x), double(2, y)]))]));
+    return JSON.parse(r[1]?.[0]?.toString('utf8') || 'null');
   }
 
   async tap(x, y) {

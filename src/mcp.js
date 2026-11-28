@@ -10,6 +10,7 @@ import { buildReport } from './diff.js';
 import { runChecks } from './doctor.js';
 import { listAllDevices, makeDriver } from './drivers/index.js';
 import { DEFAULT_WDA_URL } from './drivers/ios-device.js';
+import { buildApp, buildRef, installApp } from './build.js';
 import { crawlPair } from './pair.js';
 import { applyReview } from './report.js';
 import { summarize, summaryMarkdown } from './summary.js';
@@ -25,8 +26,8 @@ export const INSTRUCTIONS = `snappcrawl crawls an iOS app in the Simulator (or o
 
 Use it whenever you changed an iOS app's UI, navigation, texts, layout or anything that can crash a screen, before you say the work is done:
 1. status: is the setup ready, which simulator is booted, which apps have a baseline.
-2. Build the app for the simulator (xcodebuild … -sdk iphonesimulator) and install_app the .app, or pass appPath to check.
-3. check with the bundle id. The first check of an app saves the baseline: do it before your change if there is none (git stash, build, install, check, stash pop).
+2. check with build: true (it builds the Xcode project for the Simulator and installs it), or with baseRef: "main" to build and crawl main first as the baseline and compare your working tree with it: the easiest way when there is no baseline yet. Or build yourself and pass appPath / bundleId.
+3. Without baseRef, the first check of an app saves the baseline: make it from the code before your change.
 4. Read the verdict: passed, changes (review them), broken (crash or unreachable screen: almost always a bug you made). For each changed screen read texts and buttons; look at it with screen (head and diff images) when the words are not enough.
 5. Fix bugs and check again. Changes you intended: review approve. When the new state should be the reference: set_baseline.
 Never approve a crash or an unreachable screen you cannot explain. An area that changes on every run (animation, live data) can be ignored with ignore.`;
@@ -64,6 +65,12 @@ export const TOOLS = [
       properties: {
         bundleId: str('the app; default: app.bundleId of snappcrawl.config.json'),
         appPath: str('install this .app first (simulator)'),
+        build: { type: 'boolean', description: 'build the app from its Xcode project for the Simulator first, install it (bundleId comes from the build)' },
+        baseRef: str('a git ref (e.g. main): built in a temporary worktree and crawled first as the baseline, so your working tree is compared with it. Implies build'),
+        dir: str('folder with the Xcode project (default: where the MCP server runs)'),
+        project: str('.xcodeproj or .xcworkspace, if the folder has several'),
+        scheme: str('scheme to build'),
+        buildSettings: { type: 'array', items: { type: 'string' }, description: 'extra build settings, KEY=VALUE' },
         udid: str('simulator udid or name; default: the booted one'),
         device: str('crawl on this iPhone (USB) instead of a simulator'),
         label: str('a name for the run, e.g. the branch or "after-fix"'),
@@ -167,7 +174,9 @@ export function startMcp({ cfg, store, version = '', input = process.stdin, outp
   function startCheck(a) {
     const run = structuredClone(cfg);
     if (a.bundleId) run.app.bundleId = a.bundleId;
-    if (!run.app.bundleId) throw new Error('which app? · pass bundleId (list_apps shows them) or set app.bundleId in snappcrawl.config.json');
+    const building = a.build || a.baseRef;
+    if (building && a.then) throw new Error('build crawls one app · with two builds side by side install both, then use then');
+    if (!run.app.bundleId && !building) throw new Error('which app? · pass bundleId (list_apps shows them) or set app.bundleId in snappcrawl.config.json');
     // like the baseline, so its screens are all within reach; else a quick first map
     const lim = baselineLimits(store, a.then ? run.app.bundleId : run.crawl.against || run.app.bundleId) || {};
     Object.assign(run.crawl, { maxScreens: a.maxScreens || lim.maxScreens || 40, maxDepth: a.maxDepth || lim.maxDepth || 4, timeLimitMin: a.minutes || lim.timeLimitMin || 10, maxPerList: lim.maxPerList || 0 });
@@ -177,7 +186,7 @@ export function startMcp({ cfg, store, version = '', input = process.stdin, outp
     const platform = a.device ? 'ios-device' : 'ios-sim';
     const udid = a.device || a.udid || (cfg.device.platform === platform ? cfg.device.udid : '');
     const id = `job${++jobNo}`;
-    const job = { id, app: run.app.bundleId, running: true, started: Date.now(), log: [], progress: null, screens: 0, result: null, abort: false };
+    const job = { id, app: run.app.bundleId || '(from the build)', running: true, started: Date.now(), log: [], progress: null, screens: 0, result: null, abort: false };
     jobs.set(id, job);
     const io = {
       log: (lvl, msg) => {
@@ -195,12 +204,38 @@ export function startMcp({ cfg, store, version = '', input = process.stdin, outp
     };
     job.done = (async () => {
       try {
+        let built = null;
+        let baseBuilt = null;
+        if (building) {
+          if (platform !== 'ios-sim') throw new Error('build installs on a simulator · on an iPhone install the build with Xcode');
+          const b = { dir: path.resolve(a.dir || process.cwd()), project: a.project, scheme: a.scheme, settings: a.buildSettings || [], log: io.log };
+          built = await buildApp(b);
+          if (a.baseRef) {
+            baseBuilt = await buildRef({ ...b, ref: a.baseRef });
+            if (baseBuilt.bundleId !== built.bundleId) throw new Error(`${a.baseRef} builds ${baseBuilt.bundleId}, the working tree ${built.bundleId}`);
+          }
+          run.app.bundleId = a.bundleId || built.bundleId;
+          job.app = run.app.bundleId;
+          const lim = baselineLimits(store, run.app.bundleId) || {};
+          Object.assign(run.crawl, { maxScreens: a.maxScreens || lim.maxScreens || 40, maxDepth: a.maxDepth || lim.maxDepth || 4, timeLimitMin: a.minutes || lim.timeLimitMin || 10 });
+        }
         if (a.appPath) {
           if (platform !== 'ios-sim') throw new Error('appPath installs on a simulator · on an iPhone install it with Xcode');
           await install(a.appPath, udid);
         }
         const driver = driverFactory({ platform, udid, bundleId: run.app.bundleId, wdaUrl: wdaUrl() });
         if (platform === 'ios-device') await control.ensureWda({ udid, url: wdaUrl(), log: io.log });
+        if (built) {
+          await driver.resolve();
+          if (baseBuilt) {
+            await installApp(driver.udid, baseBuilt.app);
+            io.log('INFO', `installed ${a.baseRef} · crawling it as the baseline`);
+            const base = await crawl({ driver, cfg: structuredClone(run), store, io, label: a.baseRef.replace(/[^\w.-]+/g, '-') });
+            if (base.meta.status !== 'done') throw new Error(`the crawl of ${a.baseRef} did not finish · ${base.meta.error || ''}`);
+            store.setBaseline(base.meta.id);
+          }
+          await installApp(driver.udid, built.app);
+        }
         let atlas;
         let pair = null;
         if (a.then) {

@@ -57,7 +57,7 @@ function boxesFrom(diff, w, h) {
 // width in points, for the scale (3 if unknown).
 // ignoreHomeIndicator: the bar at the bottom of Face ID iPhones, which iOS tints after what was
 // on screen before (bottom 2.5 %, middle half of the width), system UI like the status bar.
-export function comparePng(fileA, fileB, outFile, { threshold = 0.1, ignoreStatusBar = true, statusBarRatio, minChangedRatio = 0, ignore = [], points, ignoreHomeIndicator = true } = {}) {
+export function comparePng(fileA, fileB, outFile, { threshold = 0.05, ignoreStatusBar = true, statusBarRatio, minChangedRatio = 0, ignore = [], points, ignoreHomeIndicator = true } = {}) {
   const a = readPng(fileA);
   const b = readPng(fileB);
   if (a.width !== b.width || a.height !== b.height) {

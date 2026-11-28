@@ -44,7 +44,7 @@ export const DEFAULTS = {
     ],
   },
   diff: {
-    threshold: 0.1, // per-pixel color tolerance (pixelmatch)
+    threshold: 0.05, // per-pixel color tolerance (pixelmatch); 0.1 misses a white card on the light gray iOS background
     minChangedRatio: 0.0005, // below this share of changed pixels a screen counts as unchanged
     ignoreStatusBar: true,
     ignoreHomeIndicator: true, // the bar at the bottom, tinted by iOS after the screen before
@@ -145,5 +145,5 @@ export const TEMPLATE = {
     fallbackManual: true,
   },
   crawl: { maxDepth: 8, maxScreens: 200, timeLimitMin: 20, blocklist: DEFAULTS.crawl.blocklist },
-  diff: { threshold: 0.1, minChangedRatio: 0.0005, ignoreStatusBar: true },
+  diff: { threshold: 0.05, minChangedRatio: 0.0005, ignoreStatusBar: true },
 };

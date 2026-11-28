@@ -75,6 +75,11 @@ function normalize(e) {
   };
 }
 
+// an SF Symbol name (house, figure.run): what a tab's image is called, not the tab
+const SYMBOL = /^[a-z0-9]+(\.[a-z0-9]+)*$/;
+// the centre of e lies within the frame of b
+const insideOf = (e, b) => e.x + e.w / 2 >= b.x && e.x + e.w / 2 <= b.x + b.w && e.y + e.h / 2 >= b.y && e.y + e.h / 2 <= b.y + b.h;
+
 /**
  * Driver for the iOS Simulator, built on Apple's simctl and Meta's idb.
  * Every driver implements the same small interface, so Android or real devices can be added later:
@@ -185,8 +190,79 @@ export class IosSimulator {
 
   async elements() {
     const raw = await this.fast('describe', (c) => c.describeAll(), async () => parseJsonish(await sh('idb', ['ui', 'describe-all', '--udid', this.udid, '--json'])));
-    return (Array.isArray(raw) ? raw : [raw]).map(normalize).filter(Boolean);
+    const els = (Array.isArray(raw) ? raw : [raw]).map(normalize).filter(Boolean);
+    // iOS 26 (SwiftUI TabView): the tab bar is listed as one empty group, its tabs are missing.
+    // The automation tree (what XCTest sees) has them: read it for the bar only.
+    // Sometimes the tabs are there, but named after their symbols (house, gear): the names learned
+    // before replace them, else the automation tree is read too.
+    const bar = els.find((e) => e.bar === 'tab');
+    if (!bar) return els;
+    const inBar = els.filter((e) => e !== bar && insideOf(e, bar) && /button/i.test(e.type));
+    const named = inBar.map((e) => (SYMBOL.test(e.label) ? { ...e, label: this.tabNames?.get(e.label) || this.tabAt?.get(Math.round((e.x + e.w / 2) / 8)) || e.label } : e));
+    if (inBar.length && named.every((e) => !SYMBOL.test(e.label))) {
+      const rest = els.filter((e) => !inBar.includes(e));
+      return [...rest, ...named.map((e) => ({ ...e, tab: true, ...(e.value === '1' ? { selected: true } : {}) }))];
+    }
+    const items = await this.tabItems(bar).catch(() => []);
+    return items.length ? [...els.filter((e) => !inBar.includes(e)), ...items] : els;
   }
+
+  async tabItems(bar, again = true) {
+    const raw = await this.fast('describe', (c) => c.describeAll({ clientType: 5 }), async () => parseJsonish(await sh('idb', ['ui', 'describe-all', '--udid', this.udid, '--client-type', 'xctest', '--json'])));
+    const all = (Array.isArray(raw) ? raw : [raw]).filter((e) => e && /^(radiobutton|button)$/i.test(e.type || '')).map((e) => [e.type, normalize(e)]).filter(([, e]) => e && insideOf(e, bar));
+    // A tab is a radio button named like the tab, with a button inside named after its symbol
+    // (house, gear); while the bar animates only the symbol buttons may be there. Which symbol is
+    // which tab is learned once both are seen (or by asking at the tab's place) and kept.
+    const names = (this.tabNames ||= new Map());
+    const symbol = (l) => SYMBOL.test(l);
+    const places = new Map();
+    for (const [t, e] of all) {
+      const k = Math.round((e.x + e.w / 2) / 8);
+      const p = places.get(k) || {};
+      if (/^radiobutton$/i.test(t)) p.radio = e;
+      else if (symbol(e.label)) p.symbol = e.label;
+      else p.button ||= e;
+      places.set(k, p);
+    }
+    const out = [];
+    let unsure = false;
+    const at = (this.tabAt ||= new Map()); // place → tab name: tabs do not move
+    for (const [k, p] of places) {
+      if (p.radio && p.symbol) names.set(p.symbol, p.radio.label);
+      if (p.radio) at.set(k, p.radio.label);
+      p.k = k;
+    }
+    for (const p of places.values()) {
+      let item = p.radio || p.button;
+      if (!item && p.symbol) {
+        const e = all.find(([, x]) => x.label === p.symbol)[1];
+        const known = names.get(p.symbol) || at.get(p.k);
+        if (known) item = { ...e, label: known };
+        else {
+          // below the symbol, at the height of the tab's title: the tab, not its image
+          const [x, y] = [Math.round(e.x + e.w / 2), Math.round(Math.max(e.y + e.h + 4, bar.y + bar.h * 0.5))];
+          const at = await this.fast('describe', (c) => c.describePoint(x, y), async () => parseJsonish(await sh('idb', ['ui', 'describe-point', '--udid', this.udid, String(x), String(y), '--json']))[0]).catch(() => null);
+          const n = at && normalize(at);
+          if (n?.label && !symbol(n.label)) {
+            names.set(p.symbol, n.label);
+            item = n;
+          } else {
+            item = e;
+            unsure = true;
+          }
+        }
+      }
+      if (item) out.push({ ...item, type: 'Button', tab: true, ...(item.value === '1' ? { selected: true } : {}) });
+    }
+    // a symbol nobody could name yet: the bar was still moving, read it once more
+    if (unsure && again) {
+      await new Promise((r) => setTimeout(r, 300));
+      return this.tabItems(bar, false);
+    }
+    return out.sort((a, b) => a.x - b.x);
+  }
+
+
 
   async tap(x, y) {
     const [px, py] = [Math.round(x), Math.round(y)];
