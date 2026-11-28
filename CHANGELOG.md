@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fix: after a launch the simulator shows the app that was in front before, or the home screen, for a moment, on a cold start for seconds. The crawler took that for the app's first screen and every tap after it for a crash. It now waits until the app is in front (its own label once known), up to 15 s, and otherwise stops with "… did not come to the front".
+
 ## 0.4.0
 
 ### Ready to publish

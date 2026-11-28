@@ -66,3 +66,37 @@ test('relaunch: an app that reopens where it was left is taken back, its screens
   assert.ok(!logs.some((m) => /launch screen is now/.test(m)));
   assert.ok(atlas.screens.every((s) => !s.oneTime));
 });
+
+test('launch: the home screen that shows for a moment after a launch is not taken for the app', async () => {
+  const app = new FakeApp();
+  const launch = app.launch.bind(app);
+  const elements = app.elements.bind(app);
+  let slow = 0;
+  app.launch = async () => ((slow = 2), launch()); // the next 2 reads still show the home screen
+  app.elements = async () => (slow-- > 0 ? [{ type: 'Application', label: '', x: 0, y: 0, w: 393, h: 852, enabled: true, value: '', id: '' }, { type: 'Button', label: 'Fitness', x: 20, y: 100, w: 60, h: 60, enabled: true, value: '', id: '' }] : elements());
+  const cfg = structuredClone(DEFAULTS);
+  cfg.app.bundleId = 'com.pulse.app';
+  Object.assign(cfg.auth, { username: app.user, password: app.pass, mfa: 'totp', totpSecret: app.secret });
+  Object.assign(cfg.crawl, { settleMs: 0, launchMs: 1 });
+  const logs = [];
+  const store = new Store(fs.mkdtempSync(path.join(os.tmpdir(), 'snappcrawl-'))).ensure();
+  const atlas = await crawl({ driver: app, cfg, store, io: { log: (l, m) => logs.push(m), ask: async () => '' } });
+  assert.equal(atlas.meta.status, 'done');
+  assert.ok(logs.some((m) => /waiting for .* to come to the front \(home screen still showing\)/.test(m)), logs.slice(0, 6).join('\n'));
+  assert.ok(!atlas.screens.some((s) => s.name === 'Fitness'), 'the home screen is not a screen of the app');
+  assert.equal(atlas.screens.filter((s) => s.crash).length, 1, 'only the real crash');
+});
+
+test('launch: an app that never comes to the front stops the crawl with a clear error', async () => {
+  const app = new FakeApp();
+  app.elements = async () => [{ type: 'Application', label: '', x: 0, y: 0, w: 393, h: 852, enabled: true, value: '', id: '' }];
+  const cfg = structuredClone(DEFAULTS);
+  cfg.app.bundleId = 'com.pulse.app';
+  Object.assign(cfg.crawl, { settleMs: 0, launchMs: 1 });
+  const store = new Store(fs.mkdtempSync(path.join(os.tmpdir(), 'snappcrawl-'))).ensure();
+  const t0 = Date.now();
+  const atlas = await crawl({ driver: app, cfg, store, io: { log() {}, ask: async () => '' } });
+  assert.equal(atlas.meta.status, 'failed');
+  assert.match(atlas.meta.error, /did not come to the front within 15 s after the launch \(the home screen is showing\)/);
+  assert.ok(Date.now() - t0 < 20_000);
+});

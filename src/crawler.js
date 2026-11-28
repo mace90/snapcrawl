@@ -529,11 +529,31 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
   const autoConsent = () => atlas.meta.intro === 'skip' || atlas.meta.intro === 'fresh';
   const hasTabBar = (els) => els.some((e) => e.tab || barOf(e) === 'tab');
 
+  // Start the app and wait until it is in front. For a moment after a launch the simulator still
+  // shows what was in front before (another app, or the home screen, whose label is empty), on a
+  // cold start for several seconds; taken for the app's first screen, every tap after it would
+  // look like a crash. Later launches wait for the app's own label.
+  async function launchApp() {
+    const before = c.launchMs ? appLabel((await observe()).els) : '';
+    await driver.launch();
+    await sleep(c.launchMs);
+    if (!c.launchMs) return;
+    const inFront = (l) => (rootApp ? l === rootApp : !!l && (l !== before || l === atlas.meta.appName));
+    const wait = Math.max(15_000, c.launchMs * 6);
+    const until = Date.now() + wait;
+    let label = appLabel((await observe()).els);
+    if (!inFront(label)) log('INFO', `waiting for ${atlas.meta.appName || cfg.app.bundleId} to come to the front (${label || 'home screen'} still showing)`);
+    while (!inFront(label) && Date.now() < until) {
+      await sleep(500);
+      label = appLabel((await observe()).els);
+    }
+    if (!inFront(label)) throw new Error(`${atlas.meta.appName || cfg.app.bundleId} did not come to the front within ${Math.round(wait / 1000)} s after the launch (${label || 'the home screen'} is showing) · does it start when you open it by hand in this simulator?`);
+  }
+
   // One launch: tap through what is in the way until the app's own screens (a tab bar, a
   // login, nothing left to tap). Returns the number of taps and the first screen's fingerprint.
   async function throughIntro() {
-    await driver.launch();
-    await sleep(c.launchMs);
+    await launchApp();
     const tried = new Set();
     let taps = 0;
     let first = null;
@@ -594,8 +614,7 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
     if (inherited) log('INFO', `intro ${mode} · like the baseline of this app`);
     if (mode === 'fresh') await resetApp();
     if (mode === 'skip') await skipIntro();
-    await driver.launch();
-    await sleep(c.launchMs);
+    await launchApp();
     let o = await ensureAuth(await observeSettled());
     if (c.prepare) {
       await manual('Bring the app to the screen where the crawl should start, then continue.', 'prepare');
@@ -608,8 +627,7 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
   // Later starts should reach one of `targets` (the screens of the path being replayed):
   // dismiss what is in the way, leave privacy decisions to the user.
   async function relaunch(targets) {
-    await driver.launch();
-    await sleep(c.launchMs);
+    await launchApp();
     let o = await ensureAuth(await observeSettled());
     const hit = (x) => targets.some((t) => is(x, t));
     if (hit(o)) return o;
