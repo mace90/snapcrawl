@@ -18,6 +18,10 @@ import { DEFAULT_WDA_URL } from '../src/drivers/ios-device.js';
 import * as legacy from '../src/legacy.js';
 import { applyReview, decisionOf, hintLines, needsReview, renderReport, reportFileName, reviewState } from '../src/report.js';
 import { startServer } from '../src/server.js';
+import { startMcp } from '../src/mcp.js';
+import { EXIT, summarize, summaryMarkdown } from '../src/summary.js';
+import { baselineLimits, checkResult } from '../src/check.js';
+import { initAgents } from '../src/agents.js';
 import { setup } from '../src/setup.js';
 import { Store } from '../src/store.js';
 import * as t from '../src/term.js';
@@ -45,6 +49,8 @@ ${t.bold('Devices')}
   wda status                  is it set up, running, in control
 
 ${t.bold('Crawl and compare')}
+  check                       crawl and compare with the baseline in one go (first run: becomes it)
+                              exit 0 passed · 1 broken · 2 changes to review · 3 needs a person · 4 setup
   crawl                       explore the app and capture every screen (options below)
   runs                        list runs
   runs rm <run>               delete a run and its comparisons
@@ -93,6 +99,13 @@ ${t.bold('Crawl options')}
   --max-per-list <n>          only the first n cells of each list (default: all)
   --diff                      compare against the baseline when done
 
+${t.bold('For agents and CI')}
+  --json                      check, diff, runs, apps, devices, doctor: one JSON document on stdout, the log on stderr
+  --markdown                  diff: the result as Markdown (a PR comment, a CI summary)
+  --no-input                  never wait for a person (automatic without a terminal or with CI set): exit 3
+  mcp                         MCP server on stdio for coding agents (Claude Code, Codex, Copilot, Cursor …)
+  init --agents               tell the agents in this repository about snappcrawl (AGENTS.md, CLAUDE.md, .mcp.json …)
+
 ${t.bold('Real iPhone')}
   1. Xcode → Settings → Accounts: sign in with your Apple ID (a free one works).
   2. iPhone: connect by USB, unlock, tap Trust; Settings → Privacy & Security → Developer Mode on.
@@ -138,8 +151,21 @@ const { values: opt, positionals: pos } = parseArgs({
     debug: { type: 'boolean' },
     help: { type: 'boolean', short: 'h' },
     version: { type: 'boolean', short: 'v' },
+    json: { type: 'boolean' },
+    markdown: { type: 'boolean' },
+    'no-input': { type: 'boolean' },
+    agents: { type: 'boolean' },
   },
 });
+
+// --json: one JSON document on stdout, everything else (log, tables) on stderr.
+const stdoutWrite = process.stdout.write.bind(process.stdout);
+if (opt.json) process.stdout.write = process.stderr.write.bind(process.stderr);
+const emit = (obj) => stdoutWrite(JSON.stringify(obj, null, 2) + '\n');
+// Nobody to press enter (an agent, CI, --json, --no-input): a crawl that needs a person stops
+// with exit code 3 and says what to set, instead of waiting forever.
+const interactive = !!process.stdin.isTTY && !opt.json && !opt['no-input'] && !process.env.CI;
+const NEEDS_INPUT = 'needs a person';
 
 const cmd = pos[0] || 'ui';
 const cfg = loadConfig(opt.config);
@@ -158,6 +184,26 @@ function driverOpts() {
 function openBrowser(url) {
   const bin = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
   execFile(bin, [url], () => {});
+}
+
+let checking = false;
+
+// The end of `snappcrawl check`: the first run of an app becomes its baseline, every later one
+// is compared with it. Exit code 0 passed, 1 broken or rejected, 2 changes to review.
+function finishCheck(atlas, pair) {
+  const r = checkResult({ atlas, pair, store, cfg });
+  if (r.verdict === 'baseline') {
+    process.exitCode = r.crashes ? 1 : 0;
+    if (opt.json) return emit(r);
+    say(`\n  ${t.ok(`baseline saved · ${r.screens} screens`)}${r.crashes ? t.red(` · ${r.crashes} crash${r.crashes === 1 ? '' : 'es'}`) : ''} · ${r.run}\n  ${t.gray('change the app, then run snappcrawl check again')}\n`);
+    return;
+  }
+  process.exitCode = EXIT[r.verdict];
+  if (opt.json) return emit(r);
+  printReport(pair?.report || store.readReport(r.base.run, r.head.run));
+  say(`  ${{ passed: t.green, changes: t.yellow, broken: t.red, failed: t.red }[r.verdict](r.verdict)}`);
+  for (const n of r.next) say(`  ${t.gray('·')} ${n}`);
+  say();
 }
 
 const RESULT = { passed: t.green, failed: t.red, 'in review': t.yellow };
@@ -232,6 +278,7 @@ const commands = {
     const results = await checklist({ cfg, print: say });
     say();
     if (results.some((r) => r.state === 'fail')) process.exitCode = 1;
+    if (opt.json) emit({ ready: !results.some((r) => r.state === 'fail'), checks: results.map(({ id, group, label, state, value, fix }) => ({ id, group, label, state, value, fix })) });
   },
 
   async devices() {
@@ -245,6 +292,7 @@ const commands = {
     if (rows.length) t.table(rows, { head: ['type', 'state', 'name', 'details', ''] });
     for (const e of errors) say('  ' + t.warn(e));
     say();
+    if (opt.json) emit({ simulators: sims, iphones: phones.map((d) => ({ name: d.name, udid: d.udid, ios: d.ios, connected: !!d.paired, lock: d.lock, developerMode: d.developerMode, wdaReady: !!d.wda?.control })), errors });
   },
 
   async boot() {
@@ -260,9 +308,20 @@ const commands = {
     const apps = await d.listApps();
     t.table(apps.map((a) => [a.name, a.bundleId, t.gray(a.type || '')]), { head: ['name', 'bundle id', 'type'] });
     say();
+    if (opt.json) emit({ device: d.name, udid: d.udid, apps: apps.map((a) => ({ ...a, baseline: store.baselineFor(a.bundleId) })) });
   },
 
   async init() {
+    if (opt.agents) {
+      const r = initAgents({ bundleId: opt.bundle || cfg.app.bundleId });
+      if (opt.json) return emit(r);
+      t.title('init --agents', 'coding agents in this repository know about snappcrawl');
+      t.table(r.files.map((f) => [f.file, f.state.startsWith('unchanged') ? t.gray(f.state) : t.green(f.state), t.gray(f.for)]), { head: ['file', '', 'read by'] });
+      say(`\n  ${t.gray('per machine, for agents that keep MCP servers outside the repository:')}`);
+      for (const c of r.commands) say(`  ${c.cmd}  ${t.gray('· ' + c.for)}`);
+      say(`\n  ${t.gray('commit these files, so every agent and colleague gets them')}\n`);
+      return;
+    }
     if (fs.existsSync(LOCAL_FILE)) return say('  ' + t.warn(`${LOCAL_FILE} already exists`));
     fs.writeFileSync(LOCAL_FILE, JSON.stringify(TEMPLATE, null, 2) + '\n');
     say('  ' + t.ok(`wrote ${LOCAL_FILE}`));
@@ -273,6 +332,9 @@ const commands = {
   async crawl() {
     cfg.app.bundleId = opt.bundle || cfg.app.bundleId;
     if (!cfg.app.bundleId) throw expected(`no app given · --bundle com.example.app or app.bundleId in ${LOCAL_FILE} (snappcrawl apps lists bundle ids)`);
+    // check: the limits of the baseline unless given, so none of its screens is out of reach
+    const lim = checking ? baselineLimits(store, opt.against || cfg.app.bundleId) : null;
+    if (lim) Object.assign(cfg.crawl, { maxDepth: lim.maxDepth, maxScreens: lim.maxScreens, timeLimitMin: lim.timeLimitMin, maxPerList: lim.maxPerList || 0 });
     if (opt['max-depth']) cfg.crawl.maxDepth = Number(opt['max-depth']);
     if (opt['max-screens']) cfg.crawl.maxScreens = Number(opt['max-screens']);
     if (opt.minutes) cfg.crawl.timeLimitMin = Number(opt.minutes);
@@ -312,7 +374,7 @@ const commands = {
       say(t.gray(`  1 ${cfg.app.bundleId} on ${driver.name} · 2 ${opt.then} on ${second.name}, at the same time\n`));
     }
 
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const rl = interactive ? readline.createInterface({ input: process.stdin, output: process.stdout }) : { close() {} };
     let stop = false;
     process.on('SIGINT', () => {
       if (stop) process.exit(130);
@@ -337,8 +399,9 @@ const commands = {
         if (type === 'edge') count.edges++;
         if (type === 'progress') count.progress = data;
       },
-      ask: async (kind) => {
+      ask: async (kind, prompt) => {
         t.setStatus('');
+        if (!interactive) throw new Error(`${NEEDS_INPUT}: ${prompt} · without a terminal: SNAPPCRAWL_USERNAME, SNAPPCRAWL_PASSWORD, SNAPPCRAWL_TOTP_SECRET or SNAPPCRAWL_PIN for logins, --alerts dismiss for prompts, leave out --prepare; or run it once in a terminal`);
         const a = (await rl.question(`         ${t.white('→')} ${kind === 'code' ? 'code: ' : 'press enter to continue '}`)).trim();
         return a;
       },
@@ -357,9 +420,12 @@ const commands = {
       rl.close();
     }
     if (atlas.meta.status !== 'done') {
-      process.exitCode = 1;
+      const needs = String(atlas.meta.error || '').startsWith(NEEDS_INPUT);
+      process.exitCode = needs ? EXIT.input : 1;
+      if (opt.json) emit({ verdict: needs ? 'input' : 'error', run: atlas.meta.id, error: atlas.meta.error || 'the crawl did not finish' });
       return void process.stderr.write(t.errorBlock(Object.assign(new Error(atlas.meta.error || 'the crawl did not finish'), { expected: true })));
     }
+    if (checking) return finishCheck(atlas, pair);
     if (pair) {
       if (!pair.report) return void say(`\n  ${t.gray('stopped before the test app · baseline:')} ${pair.base.meta.id}\n`);
       printReport(pair.report);
@@ -377,6 +443,21 @@ const commands = {
     say(`\n  ${t.gray('next:')} snappcrawl ${opt.diff ? '' : 'diff'}\n`);
   },
 
+  // crawl + compare with the baseline in one go, for agents and CI (see src/summary.js)
+  async check() {
+    checking = true;
+    await commands.crawl();
+  },
+
+  // MCP server on stdio: stdout belongs to the protocol, nothing else may be printed there
+  async mcp() {
+    process.stdout.write = process.stderr.write.bind(process.stderr);
+    startMcp({ cfg, store, version: pkg.version, output: { write: stdoutWrite } });
+    process.stderr.write(`snappcrawl ${pkg.version} · MCP server on stdio · store ${store.root}\n`);
+    await new Promise((resolve) => process.stdin.on('end', resolve)); // until the client closes stdin
+    process.exit(0);
+  },
+
   async runs() {
     if (pos[1] === 'rm') {
       if (!pos[2]) throw expected('which run? · snappcrawl runs rm <run> (snappcrawl runs lists them)');
@@ -387,6 +468,7 @@ const commands = {
     t.title('runs', store.root);
     const b = store.readBaselines();
     const runs = store.listRuns();
+    if (opt.json) return emit({ store: store.root, runs: runs.map((r) => ({ ...r, baseline: b[r.app] === r.id })) });
     if (!runs.length) return say(t.gray('  no runs yet · snappcrawl crawl or snappcrawl demo\n'));
     t.table(runs.map((r) => [b[r.app] === r.id ? t.white('◆') : ' ', r.id, r.label, r.appName || r.app, `${r.screens} screens`, r.crashes ? t.red(`${r.crashes} crash`) : '', t.gray(r.status)]), { head: ['', 'run', 'label', 'app', 'size', '', 'status'] });
     say(t.gray('\n  ◆ baseline of its app · snappcrawl runs rm <run> deletes one\n'));
@@ -402,6 +484,12 @@ const commands = {
     const { base, head } = pickRuns(pos[1], pos[2]);
     let report = buildReport({ store, baseId: base, headId: head, cfg });
     if (opt.ai) report = await notes(report);
+    if (opt.json) {
+      const r = summarize(report, store);
+      process.exitCode = EXIT[r.verdict];
+      return emit(r);
+    }
+    if (opt.markdown) return void say(summaryMarkdown(summarize(report, store)));
     printReport(report);
     if (report.summary.bad) process.exitCode = 1;
   },
@@ -564,7 +652,7 @@ const WDA = {
 };
 
 // Files from the previous name still work; say once how to move them.
-if (!opt.version && !opt.help && !['help', 'migrate', 'wda'].includes(cmd)) {
+if (!opt.version && !opt.help && !['help', 'migrate', 'wda', 'mcp'].includes(cmd) && !opt.json) {
   const found = legacy.hintOnce(legacy.legacyInUse());
   if (found) {
     say(t.gray(`\n  still reading files from before the rename: ${found.map((f) => f.from).join(', ')}`));
@@ -581,6 +669,7 @@ try {
   } else await commands[cmd]();
 } catch (e) {
   t.setStatus('');
+  if (opt.json) emit({ verdict: 'error', error: e.message });
   process.stderr.write(t.errorBlock(e, { debug: opt.debug }));
-  process.exitCode = 1;
+  process.exitCode = opt.json || checking ? EXIT.setup : 1;
 }

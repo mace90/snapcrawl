@@ -54,7 +54,9 @@ test('follow: the baseline screens come first, in its order, and are kept at the
 
   const free = await run(store, new FakeApp({ extra: true }), { follow: false, maxScreens: n });
   const freeSum = diff(store, base, free.atlas);
-  assert.ok(freeSum.bad > 1, 'without following, the new screen pushes a baseline screen out');
+  assert.ok(freeSum.skipped >= 1, 'without following, the new screen pushes a baseline screen out');
+  assert.equal(freeSum.bad, 1, 'pushed out by the screen limit is not broken: only the crash');
+  assert.equal(free.atlas.meta.stopped, 'screens');
 
   const { atlas, logs } = await run(store, new FakeApp({ extra: true }), { maxScreens: n });
   const sum = diff(store, base, atlas);

@@ -723,6 +723,7 @@ function renderInspector() {
   $('#cmpside').innerHTML = `${done}<div class="it"><h3>${esc(s.name)}</h3><span class="tag t-${dec || s.status}">${esc(label)}</span></div>
     <p class="path">${['start', ...s.path].map(esc).join(' → ')}</p>${images}
     <table class="kv"><tr><td>screen</td><td>${esc(s.id)}</td></tr><tr><td>status</td><td>${esc(s.reason || STATUS[s.status])}</td></tr><tr><td>pixel Δ</td><td>${pct(s.ratio)}</td></tr><tr><td>regions</td><td>${s.boxes.length}</td></tr><tr><td>elements</td><td>${s.elements ?? '–'}</td></tr>${s.size ? `<tr><td>size</td><td>${s.size[0]}×${s.size[1]}</td></tr>` : ''}</table>
+    ${s.texts ? `<div class="sec"><h4>texts</h4>${s.texts.added.slice(0, 8).map((x) => `<p class="hint" style="margin:0 0 4px;color:var(--fg)">+ ${esc(x)}</p>`).join('')}${s.texts.removed.slice(0, 8).map((x) => `<p class="hint" style="margin:0 0 4px">− ${esc(x)}</p>`).join('')}</div>` : ''}
     ${hintLines(s).length ? `<div class="sec"><h4>buttons</h4>${hintLines(s).map((l) => `<p class="hint" style="margin:0 0 4px;color:var(--fg)">${esc(l)}</p>`).join('')}</div>` : ''}
     ${ignSec}
     ${note ? `<div class="note"><b>note · ${esc(note.model)} · ${esc(note.verdict)}</b>${esc(note.summary)}</div>` : ''}

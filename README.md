@@ -48,6 +48,7 @@ Narrower than 100 columns the banner is one line (`■ snappcrawl v0.3.0`); with
 - **Logins handled.** Username and password, TOTP codes generated automatically, SMS or e-mail codes typed in when asked, or log in by hand and let it continue.
 - **Review as a graph.** Live crawl, screen graph, side-by-side and pixel diff, approve or reject each change, export a report.
 - **UI and CLI do the same.** Every action exists in both (table below), so it also runs in CI or over SSH.
+- **Built for coding agents.** An MCP server for Claude Code, Codex, Copilot and Cursor, `snappcrawl check --json` with exit codes, changes described in words (texts that came and went, buttons renamed or moved), and `snappcrawl init --agents` so every agent in a repository knows when to check. See [With coding agents](#with-coding-agents).
 - **Optional model notes.** Bring your own Anthropic, OpenAI or Ollama model to describe changes. The pixel diff decides; the model only comments.
 
 ---
@@ -115,6 +116,63 @@ snappcrawl crawl --bundle com.acme.app --label v2.3.0    # first run of an app b
 snappcrawl crawl --bundle com.acme.app --label v2.4.0 --diff
 snappcrawl ui
 ```
+
+## With coding agents
+
+An agent that changes an iOS app can prove its change: crawl the app, compare every screen with the state before, fix what broke. snappcrawl gives it the means and tells it when.
+
+```bash
+cd my-app-repo
+snappcrawl init --agents --bundle com.acme.app
+```
+
+This writes a short *UI checks with snappcrawl* section to `AGENTS.md` (read by Codex, Copilot, Cursor, Gemini, Jules …), imports it in `CLAUDE.md` (Claude Code) and `.github/copilot-instructions.md`, and registers the MCP server in `.mcp.json` (Claude Code), `.vscode/mcp.json` (VS Code with Copilot) and `.cursor/mcp.json`. Existing files keep their content; running it again changes nothing. Commit them, so every agent and colleague gets them. For agents that keep MCP servers per machine:
+
+```bash
+codex mcp add snappcrawl -- snappcrawl mcp
+claude mcp add --scope user snappcrawl -- snappcrawl mcp
+```
+
+**MCP tools** (`snappcrawl mcp`, stdio, no SDK):
+
+| Tool | |
+|---|---|
+| `status` | setup ready? booted simulators, baselines per app, latest runs |
+| `list_apps` · `install_app` | installed apps; install a `.app` built with `xcodebuild -sdk iphonesimulator` |
+| `check` · `check_status` · `stop` | crawl and compare with the baseline. Answers within `wait` seconds (default 45), else with a job id to wait on, because some clients end a tool call after 60 s. The first check of an app saves its baseline. |
+| `compare` | the comparison of any two runs |
+| `screen` | one screen: path, texts and buttons that changed, and the head, base and diff pictures as images |
+| `review` · `set_baseline` · `ignore` | approve or reject changes, make a run the reference, leave an animation out |
+
+**The result** (MCP, `check --json`, `diff --json`) says in words what changed, so an agent rarely needs the pictures:
+
+```json
+{
+  "verdict": "changes",
+  "app": "com.acme.app",
+  "counts": { "screens": 24, "same": 22, "changed": 1, "new": 1, "broken": 0 },
+  "screens": [{
+    "id": "s001", "name": "Home", "status": "changed", "decision": "open",
+    "path": ["start", "Los geht’s"], "pixelsChanged": "1.20 %",
+    "texts": { "added": ["Mein Profil"], "removed": ["Profil"] },
+    "buttons": ["renamed \"Profil\" → \"Mein Profil\" · same place · leads to the same screen"],
+    "images": { "base": "…/s001.png", "head": "…/s001.png", "diff": "…/s001.png" }
+  }],
+  "next": ["Look at each open change …", "snappcrawl review <id|all> approve …"]
+}
+```
+
+| verdict | exit code | meaning |
+|---|---|---|
+| `passed` | 0 | nothing open: every screen as in the baseline, or all changes approved |
+| `baseline` | 0 | first run of the app, saved as its baseline |
+| `broken` | 1 | a new crash or a screen that can no longer be reached (a crash the baseline had too is listed as `known`) |
+| `failed` | 1 | a change was rejected |
+| `changes` | 2 | changed or new screens wait for a decision |
+| `input` | 3 | a login, a code or a PIN is needed: set `SNAPPCRAWL_USERNAME`, `SNAPPCRAWL_PASSWORD`, `SNAPPCRAWL_TOTP_SECRET`, `SNAPPCRAWL_PIN` |
+| `error` | 4 | setup problem (no simulator, app not installed …) |
+
+`check` uses the limits of the baseline unless given, so no baseline screen is out of reach; screens a run did not get to because of its own limit count as *not reached*, not as broken. A screen whose texts or buttons changed counts as changed even with the same pixels (an accessibility label, for example). Without a terminal, with `CI` set, `--json` or `--no-input` snappcrawl never waits for a person. `snappcrawl diff --markdown` prints the result for a pull request comment.
 
 ## Real iPhone over USB
 
@@ -534,6 +592,9 @@ Then `snappcrawl diff --ai`, or **Notes** in the web UI. Global settings live in
 | `snappcrawl boot <simulator>` | boot a simulator |
 | `snappcrawl apps` | apps on the simulator · `--device` for an iPhone |
 | `snappcrawl wda setup \| start \| stop \| status` | WebDriverAgent for iPhones · `--team --bundle-id --udid` |
+| `snappcrawl check` | crawl and compare with the baseline in one go, for agents and CI · `--json`, exit codes 0–4 (see [With coding agents](#with-coding-agents)) |
+| `snappcrawl mcp` | MCP server on stdio for coding agents |
+| `snappcrawl init --agents` | AGENTS.md, CLAUDE.md, Copilot instructions and MCP configs for this repository |
 | `snappcrawl crawl` | explore the app · `--bundle --then --parallel --against --udid --device --label --max-depth --max-screens --minutes --mfa --prepare --alerts --dismiss --block --prefer --max-per-list --intro --reinstall --no-follow --diff` |
 | `snappcrawl runs` · `runs rm <run>` | list runs, delete one with its comparisons |
 | `snappcrawl baseline [run]` | show baselines, or make a run the baseline of its app |

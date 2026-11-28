@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### For coding agents
+- `snappcrawl mcp`: an MCP server on stdio (JSON-RPC by hand, no SDK) for Claude Code, Codex, Copilot, Cursor. Tools: `status`, `list_apps`, `install_app`, `check`, `check_status`, `stop`, `compare`, `screen` (with the pictures as images), `review`, `set_baseline`, `ignore`. Server instructions tell an agent when to check and how to read the result. A long check answers with a job id within `wait` seconds (some clients end tool calls after 60 s) and sends progress notifications.
+- `snappcrawl check`: crawl and compare with the baseline in one go; the first check saves the baseline. Exit codes: 0 passed, 1 broken or rejected, 2 changes to review, 3 needs a person, 4 setup.
+- `--json` for `check`, `diff`, `runs`, `apps`, `devices`, `doctor`: one JSON document on stdout, the log on stderr. `diff --markdown` for pull requests.
+- Changes in words: every screen stores its texts; a comparison lists the texts that came and went (numbers count as the same text) beside the buttons renamed, moved or removed. A screen with other texts or buttons counts as changed even with the same pixels.
+- Never stuck waiting: without a terminal, with `CI`, `--json` or `--no-input`, a crawl that needs a login, a code or a PIN stops with exit code 3 and says which variables to set.
+- A crash the baseline had too is marked `known` and does not make a check `broken`.
+- `check` takes the limits of the baseline unless given. Screens a run did not reach because of its screen or time limit count as *not reached* instead of *unreachable* (`meta.stopped`).
+- `snappcrawl init --agents`: a *UI checks with snappcrawl* section in `AGENTS.md`, an import in `CLAUDE.md`, `.github/copilot-instructions.md`, and the MCP server in `.mcp.json`, `.vscode/mcp.json`, `.cursor/mcp.json`. Marked blocks, other content untouched, idempotent.
+
 ### Faster on the simulator: idb_companion directly
 - Reading the screen, tapping and screenshots go straight to `idb_companion` over its local socket (gRPC over HTTP/2 with Node's own `http2`, no new dependency) instead of starting the `idb` command line tool each time: a read takes 0.09 instead of 0.3–0.44 s, a tap 0.1 instead of 0.4 s, a screenshot 0.28 instead of 0.58 s. Same elements, pixel-identical pictures. If the companion cannot be reached or answers twice with an error, the crawl goes on with the `idb` command line; `SNAPPCRAWL_IDB=cli` always uses it.
 - After a tap the screen is read after a third of `settleMs` and then until it stands still. The full `settleMs` is only waited for while the screen still looks as before the tap, so a transition that starts late is not missed.

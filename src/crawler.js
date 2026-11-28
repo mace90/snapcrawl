@@ -729,7 +729,9 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
       actions.sort((a, b) => rank(a) - rank(b));
       pairOf.set(id, byKey);
     }
-    const s = { id, name: uniqueName(names, nameOf(o.els, size, via)), fp: o.fp, sig: o.sig, depth, path: pathRefs, parent, screenshot: file, elements: o.els.length, size, actions, blocked };
+    // what the screen says, for comparisons in words (what an agent reads instead of pixels)
+    const texts = [...new Set(o.els.filter((e) => !e.web && !/^(application|window|other)$/i.test(e.type)).map((e) => clip(String(e.label || e.value || '').replace(/\s+/g, ' ').trim(), 80)).filter(Boolean))].slice(0, 120);
+    const s = { id, name: uniqueName(names, nameOf(o.els, size, via)), fp: o.fp, sig: o.sig, depth, path: pathRefs, parent, screenshot: file, elements: o.els.length, size, actions, blocked, texts };
     if (base) {
       s.base = base.id;
       usedBase.add(base.id);
@@ -929,6 +931,7 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
       (atlas.meta.order ||= []).push(s.id); // the exploration order, for a run that follows this one
       if (full() && !(follow && s.base)) {
         log('WARN', 'limit reached · stopping');
+        atlas.meta.stopped = 'screens';
         break;
       }
       if (s.oneTime) {
@@ -939,6 +942,7 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
       for (const [i, act] of s.actions.entries()) {
         if (over() || (full() && !follow)) {
           log('WARN', 'limit reached · stopping');
+          atlas.meta.stopped = over() ? 'time' : 'screens';
           break outer;
         }
         if (full() && !expected(s, act)) {

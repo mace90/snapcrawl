@@ -148,6 +148,7 @@ export function buildReport({ store, baseId, headId, cfg }) {
     if (h.oneTime || b?.oneTime) entry.oneTime = true;
     if (h.crash) {
       Object.assign(entry, { status: 'bad', reason: 'crash', name: b ? b.name : 'Crash' });
+      if (b?.crash) entry.known = true; // the baseline crashed there too
     } else if (!b && h.oneTime) {
       Object.assign(entry, { status: 'skipped', reason: 'one-time (skipped)' });
     } else if (!b) {
@@ -172,7 +173,10 @@ export function buildReport({ store, baseId, headId, cfg }) {
     if (used.has(b.id) || b.crash) continue;
     const id = `base-${b.id}`;
     baseIdMap.set(b.id, id);
-    const gone = b.oneTime ? { status: 'skipped', reason: 'one-time (skipped)', oneTime: true } : { status: 'bad', reason: 'unreachable' };
+    // the head run stopped at its screen or time limit: a screen it did not get to is not broken
+    const gone = b.oneTime ? { status: 'skipped', reason: 'one-time (skipped)', oneTime: true }
+      : head.meta.stopped ? { status: 'skipped', reason: `not reached (${head.meta.stopped === 'time' ? 'time' : 'screen'} limit)` }
+      : { status: 'bad', reason: 'unreachable' };
     screens.push({ id, name: b.name, depth: b.depth, path: b.path.map((r) => r.label || r.type), elements: b.elements, ...gone, baseImg: img(baseId, b), headImg: null, diffImg: null, ratio: null, boxes: [], size: null });
   }
 
@@ -180,6 +184,8 @@ export function buildReport({ store, baseId, headId, cfg }) {
   // renamed or moved button: does it still lead to the screen its old self led to?
   const target = (run, from, label) => run.edges.find((e) => e.from === from && e.action?.label === label)?.to;
   for (const [h, b, entry] of pairsOf) {
+    const words = textChanges(h.texts, b.texts);
+    if (words) entry.texts = words;
     const hints = actionHints(h.actions, h.size, b.actions, b.size);
     if (!hints) continue;
     const leads = (newLabel, oldLabel) => {
@@ -190,6 +196,11 @@ export function buildReport({ store, baseId, headId, cfg }) {
     for (const r of hints.renamed) r.same = leads(r.to, r.from);
     for (const m of hints.moved) m.same = leads(m.label, m.label);
     entry.hints = hints;
+  }
+  // the same pixels, but other words or buttons (an accessibility label, a hidden element):
+  // still a change of the screen
+  for (const [, , entry] of pairsOf) {
+    if (entry.status === 'same' && (entry.texts || entry.hints)) Object.assign(entry, { status: 'changed', reason: 'texts or buttons, same pixels' });
   }
 
   const edges = [];
@@ -221,4 +232,16 @@ export function buildReport({ store, baseId, headId, cfg }) {
   };
   store.writeReport(report);
   return report;
+}
+
+// Texts a screen shows now and did not before, and the other way round (runs before texts were
+// stored give nothing). Numbers count as the same text, so a clock or a counter is no change.
+export function textChanges(now, before) {
+  if (!Array.isArray(now) || !Array.isArray(before)) return null;
+  const key = (t) => t.replace(/\d+([.,:]\d+)*/g, '#');
+  const had = new Set(before.map(key));
+  const has = new Set(now.map(key));
+  const added = now.filter((t) => !had.has(key(t)));
+  const removed = before.filter((t) => !has.has(key(t)));
+  return added.length || removed.length ? { added, removed } : null;
 }
