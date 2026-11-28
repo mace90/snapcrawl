@@ -1,0 +1,45 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { test } from 'node:test';
+import { DEFAULTS } from '../src/config.js';
+import { crawl } from '../src/crawler.js';
+import { Store } from '../src/store.js';
+import { FakeApp } from './fake-app.js';
+import { TabApp } from './fake-tabs.js';
+
+// Count what a crawl costs on the device: launches, reads of the screen, app state queries.
+const measure = async (app, bundleId) => {
+  const n = { launches: 0, reads: 0, states: 0 };
+  const wrap = (k, key) => {
+    const f = app[k].bind(app);
+    app[k] = async (...a) => (n[key]++, f(...a));
+  };
+  wrap('launch', 'launches');
+  wrap('elements', 'reads');
+  wrap('isRunning', 'states');
+  const cfg = structuredClone(DEFAULTS);
+  cfg.app.bundleId = bundleId;
+  Object.assign(cfg.auth, { username: app.user, password: app.pass, mfa: 'totp', totpSecret: app.secret });
+  Object.assign(cfg.crawl, { settleMs: 0, launchMs: 0 });
+  const logs = [];
+  const store = new Store(fs.mkdtempSync(path.join(os.tmpdir(), 'snappcrawl-'))).ensure();
+  const atlas = await crawl({ driver: app, cfg, store, io: { log: (l, m) => logs.push(m), ask: async () => '' } });
+  return { atlas, logs, n };
+};
+
+test('perf: a screen on the way is reached without restarting the app', async () => {
+  const { atlas, logs, n } = await measure(new TabApp(), 'com.tabs.app');
+  assert.equal(atlas.meta.status, 'done');
+  assert.ok(logs.some((m) => /replay s\d+ ok · from s\d+ without a restart/.test(m)));
+  assert.ok(n.launches <= 6, `${n.launches} launches (11 before)`);
+  assert.ok(n.reads <= 175, `${n.reads} reads (205 before)`);
+});
+
+test('perf: the app state is asked only when the screen is not the app’s own', async () => {
+  const { atlas, n } = await measure(new FakeApp(), 'com.pulse.app');
+  const taps = atlas.edges.length;
+  assert.ok(atlas.screens.some((s) => s.crash), 'the crash is still found');
+  assert.ok(n.states <= 2, `${n.states} app state queries for ${taps} transitions`);
+});

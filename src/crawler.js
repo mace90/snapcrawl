@@ -172,6 +172,19 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
   const log = (lvl, msg) => io.log(lvl, msg);
   const event = (type, data) => io.event?.(type, data);
   const settle = (f = 1) => sleep(c.settleMs * f);
+  // Every call that can change what is on screen counts as a move. A read with no move since
+  // needs no second read (each idb or WebDriverAgent call costs a few hundred ms).
+  let moves = 0;
+  let lastObs = null;
+  const MOVES = new Set(['tap', 'launch', 'type', 'alertAction', 'activate', 'resetData', 'reinstall']);
+  const raw = driver;
+  driver = new Proxy(raw, {
+    get(t, k) {
+      const v = Reflect.get(t, k);
+      if (typeof v !== 'function') return v;
+      return MOVES.has(k) ? (...a) => (moves++, v.apply(t, a)) : v.bind(t);
+    },
+  });
 
   const runId = store.newRunId(label);
   const dir = store.runDir(runId);
@@ -275,9 +288,13 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
         await answerAlert(a);
         continue;
       }
-      return { els, fp: fingerprint(els), sig: signature(els) };
+      const o = { els, fp: fingerprint(els), sig: signature(els) };
+      lastObs = { o, moves };
+      return o;
     }
   };
+  // what is on screen: the last read when nothing was tapped since, else a new one
+  const current = () => (lastObs && lastObs.moves === moves ? lastObs.o : observe());
 
   // After a tap or a launch the screen may still be moving (during a push animation the old and
   // the new list are both on screen) or loading (nearly empty). Read until two reads in a row
@@ -294,6 +311,7 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
       const still = layout(n.els) === layout(o.els);
       o = n;
       if (still && o.els.length > 2) return o;
+      if (still && rootApp && appLabel(o.els) && appLabel(o.els) !== rootApp) return o; // another app in front (a crash: the home screen)
     }
     return o;
   }
@@ -739,35 +757,62 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
     save();
   }
 
-  // Bring the app to screen s: stay, go back one level, or relaunch and replay the path from the
-  // deepest screen of it that is showing. Every step is checked by similarity; a step that lands
-  // elsewhere gets the dismiss treatment; a failed replay is retried once from a fresh start.
+  // From screens[k] (on screen now) along the taps to the last of screens. Every step is
+  // checked by similarity; a step that lands elsewhere gets the dismiss treatment.
+  async function replayFrom(o, steps, k) {
+    for (let i = k + 1; i < steps.length; i++) {
+      const p = locate(o.els, steps[i].path.at(-1));
+      await driver.tap(p.x, p.y);
+      await settle();
+      o = await ensureAuth(await observeSettled());
+      if (!is(o, steps[i])) o = await dismissInterstitials(o, (x) => is(x, steps[i]), 'replay');
+      if (!is(o, steps[i])) return { o, ok: false };
+    }
+    return { o, ok: true };
+  }
+  const deepest = (o, steps) => {
+    for (let j = steps.length - 1; j >= 0; j--) if (is(o, steps[j])) return j;
+    return -1;
+  };
+
+  // Bring the app to screen s. Without a restart first: stay, or from the screen that is
+  // showing, or after going back up to 3 times, follow the path from a screen on it (the
+  // screens from the entry point to s). Else relaunch and replay the path from the deepest
+  // screen of it that is showing; a failed replay is retried once from a fresh start.
+  // fresh: always restart (a second try of a tap that led elsewhere).
   async function goTo(s, { fresh = false } = {}) {
     if (s.oneTime) return null;
-    let o = await observe();
-    if (!fresh && is(o, s)) return o;
-    const back = fresh ? null : o.els.find((e) => /button/i.test(e.type) && isBack(e));
-    if (back) {
-      await tapEl(back);
-      await settle();
-      o = await observeSettled();
+    const steps = chain(s);
+    let o = await current();
+    if (!fresh) {
       if (is(o, s)) return o;
+      for (let backs = 0; backs <= 3; backs++) {
+        const k = deepest(o, steps);
+        if (k >= 0) {
+          const r = await replayFrom(o, steps, k);
+          if (r.ok) {
+            log('STEP', `replay ${s.id} ok · from ${steps[k].id} without a restart`);
+            return r.o;
+          }
+          break; // off the path: restart
+        }
+        const back = backs < 3 && o.els.find((e) => /button/i.test(e.type) && isBack(e));
+        if (!back) break;
+        const before = o;
+        await tapEl(back);
+        await settle();
+        o = await observeSettled();
+        if (is(o, s)) return o;
+        if (o.fp === before.fp) break; // going back did nothing: restart
+      }
     }
     for (let attempt = 1; attempt <= 2; attempt++) {
-      o = await relaunch(chain(s));
+      o = await relaunch(steps);
       await checkEntry(o);
       if (s.oneTime) return null;
-      const steps = chain(s);
-      let k = -1;
-      for (let j = steps.length - 1; j >= 0 && k < 0; j--) if (is(o, steps[j])) k = j;
-      for (let i = k + 1; k >= 0 && i < steps.length; i++) {
-        const p = locate(o.els, steps[i].path.at(-1));
-        await driver.tap(p.x, p.y);
-        await settle();
-        o = await ensureAuth(await observeSettled());
-        if (!is(o, steps[i])) o = await dismissInterstitials(o, (x) => is(x, steps[i]), 'replay');
-        if (!is(o, steps[i])) break;
-      }
+      const path = chain(s); // the entry point may have moved
+      const k = deepest(o, path);
+      if (k >= 0) o = (await replayFrom(o, path, k)).o;
       const m = score(o, s);
       if (m >= threshold) {
         log('STEP', `replay ${s.id} ok · match ${m.toFixed(2)}`);
@@ -877,7 +922,9 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
         await driver.tap(p.x, p.y);
         await settle();
 
-        const state = await appState();
+        // still the app's own screen: neither crashed nor left, no need to ask for the app state
+        let n = await observeSettled();
+        const state = rootApp && appLabel(n.els) === rootApp ? 4 : await appState();
         if (state !== 4 && state > 1) {
           // Safari or another app came to the front: note it, go back, register nothing
           warn(`left app after tap "${clip(act.label || act.type, 60)}" on ${s.id} · returning`);
@@ -901,7 +948,7 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
           continue;
         }
 
-        let n = await ensureAuth(await observeSettled());
+        n = await ensureAuth(n);
         // the baseline went somewhere else with this tap: once more, after a fresh start
         const exp = expected(s, act);
         const hitsExp = (x) => {

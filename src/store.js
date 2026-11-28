@@ -54,9 +54,19 @@ export class Store {
     return fs
       .readdirSync(this.runsDir)
       .map((id) => {
+        // the summary of a run is read again only when its atlas.json changed: the UI asks
+        // for the list on every state update, and a run's atlas can be large
+        let mtime = 0;
+        try {
+          mtime = fs.statSync(path.join(this.runDir(id), 'atlas.json')).mtimeMs;
+        } catch {
+          return null;
+        }
+        const hit = (this._runCache ||= new Map()).get(id);
+        if (hit && hit.mtime === mtime) return hit.summary;
         try {
           const a = this.readRun(id);
-          return {
+          const summary = {
             id,
             label: a.meta.label || '',
             created: a.meta.created,
@@ -68,6 +78,8 @@ export class Store {
             crashes: a.screens.filter((s) => s.crash).length,
             ...(a.meta.against ? { against: a.meta.against, baseline: a.meta.baseline } : {}),
           };
+          this._runCache.set(id, { mtime, summary });
+          return summary;
         } catch {
           return null;
         }

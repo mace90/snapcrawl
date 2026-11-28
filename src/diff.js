@@ -52,7 +52,8 @@ function boxesFrom(diff, w, h) {
 
 // statusBarRatio: status bar height / screen height (both in points). The mask is applied in
 // image pixels, so it fits any screenshot scale (simulator 3x, real devices 2x or 3x).
-export function comparePng(fileA, fileB, outFile, { threshold = 0.1, ignoreStatusBar = true, statusBarRatio } = {}) {
+// minChangedRatio: below it no diff image is written (an unchanged screen never shows one).
+export function comparePng(fileA, fileB, outFile, { threshold = 0.1, ignoreStatusBar = true, statusBarRatio, minChangedRatio = 0 } = {}) {
   const a = readPng(fileA);
   const b = readPng(fileB);
   if (a.width !== b.width || a.height !== b.height) {
@@ -66,8 +67,9 @@ export function comparePng(fileA, fileB, outFile, { threshold = 0.1, ignoreStatu
   }
   const out = new PNG({ width: w, height: h });
   const changed = pixelmatch(a.data, bData, out.data, w, h, { threshold, includeAA: false, alpha: 0.15, diffColor: [255, 0, 0], aaColor: [255, 255, 0] });
-  fs.writeFileSync(outFile, PNG.sync.write(out));
-  return { ratio: changed / (w * h), boxes: changed ? boxesFrom(out.data, w, h) : [], width: w, height: h };
+  const ratio = changed / (w * h);
+  if (ratio >= minChangedRatio) fs.writeFileSync(outFile, PNG.sync.write(out));
+  return { ratio, boxes: changed ? boxesFrom(out.data, w, h) : [], width: w, height: h };
 }
 
 // Screens are matched across runs by the baseline screen a run that followed the baseline
@@ -135,7 +137,7 @@ export function buildReport({ store, baseId, headId, cfg }) {
       const file = `${h.id}.png`;
       const r = comparePng(path.join(store.runDir(baseId), b.screenshot), path.join(store.runDir(headId), h.screenshot), path.join(outDir, file), { ...cfg.diff, statusBarRatio: statusBarRatio([[base, b], [head, h]]) });
       const changed = r.ratio >= cfg.diff.minChangedRatio;
-      Object.assign(entry, { status: changed ? 'changed' : 'same', ratio: r.ratio, boxes: changed ? r.boxes : [], size: [r.width, r.height], diffImg: `diffs/${baseId}__${headId}/${file}`, sizeMismatch: !!r.sizeMismatch });
+      Object.assign(entry, { status: changed ? 'changed' : 'same', ratio: r.ratio, boxes: changed ? r.boxes : [], size: [r.width, r.height], diffImg: changed ? `diffs/${baseId}__${headId}/${file}` : null, sizeMismatch: !!r.sizeMismatch });
     }
     if (b && !h.crash && !b.crash) pairsOf.push([h, b, entry]);
     idMap.set(h.id, entry.id);

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Faster
+- Going to a screen without a restart: from the screen that is showing, or after up to three *Back* taps, the crawler follows the taps from a screen on the way. A relaunch is only the fallback. In the iOS Settings (depth 3, 50 screens): 5 restarts instead of 18, about 7 instead of 9 minutes. The comparison of two runs: 50 of 50 screens found again.
+- A *Back* that changes nothing is not tapped again: the app is restarted at once.
+- A screen read is reused while nothing was tapped. The app state (crash, other app) is only asked for when the screen no longer belongs to the app, which saves one call per tap. After a crash the crawler no longer waits for the home screen to stand still.
+- Comparisons write a diff image only for changed screens (50 screens: 7 instead of 15 seconds).
+- The list of runs is read again only for runs whose `atlas.json` changed, so the web UI stays fast with many runs.
+
 ### PIN
 - New setting `auth.pin` (`SNAPPCRAWL_PIN`, or the *pin* field in the web UI): a PIN of any length that the app asks for. On a number pad the digits are tapped one by one, otherwise it is typed into the field. A send button is tapped if needed, and a confirmation prompt gets it once more.
 - A wrong PIN is never retried on the same prompt (it could lock the account): the crawl warns and pauses for you. Without a PIN it pauses too. The log shows only the number of digits.
