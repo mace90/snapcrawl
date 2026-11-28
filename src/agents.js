@@ -8,6 +8,8 @@ import path from 'node:path';
 const START = '<!-- snappcrawl:start -->';
 const END = '<!-- snappcrawl:end -->';
 export const SERVER = { command: 'snappcrawl', args: ['mcp'] };
+// npx: works in a cloned repository without installing snappcrawl first (needs it on npm)
+export const SERVER_NPX = { command: 'npx', args: ['-y', 'snappcrawl', 'mcp'] };
 
 export function agentBlock({ bundleId = '' } = {}) {
   const id = bundleId || '<bundle id>';
@@ -55,7 +57,9 @@ export function upsertServer(file, key, entry) {
   return existed ? 'updated' : 'created';
 }
 
-export function initAgents({ dir = process.cwd(), bundleId = '' } = {}) {
+export function initAgents({ dir = process.cwd(), bundleId = '', npx = false } = {}) {
+  const server = npx ? SERVER_NPX : SERVER;
+  const cmd = server === SERVER_NPX ? 'npx -y snappcrawl mcp' : 'snappcrawl mcp';
   const block = agentBlock({ bundleId });
   const p = (f) => path.join(dir, f);
   const done = [];
@@ -65,14 +69,15 @@ export function initAgents({ dir = process.cwd(), bundleId = '' } = {}) {
   const claudeText = fs.existsSync(claude) ? fs.readFileSync(claude, 'utf8') : '';
   done.push(['CLAUDE.md', /^@AGENTS\.md\s*$/m.test(claudeText) ? 'unchanged (imports AGENTS.md)' : upsertBlock(claude, `${START}\n@AGENTS.md\n${END}`), 'Claude Code']);
   done.push(['.github/copilot-instructions.md', upsertBlock(p('.github/copilot-instructions.md'), block), 'GitHub Copilot']);
-  done.push(['.mcp.json', upsertServer(p('.mcp.json'), 'mcpServers', SERVER), 'Claude Code (project MCP server)']);
-  done.push(['.vscode/mcp.json', upsertServer(p('.vscode/mcp.json'), 'servers', { type: 'stdio', ...SERVER }), 'VS Code with Copilot']);
-  done.push(['.cursor/mcp.json', upsertServer(p('.cursor/mcp.json'), 'mcpServers', SERVER), 'Cursor']);
+  done.push(['.mcp.json', upsertServer(p('.mcp.json'), 'mcpServers', server), 'Claude Code (project MCP server)']);
+  done.push(['.vscode/mcp.json', upsertServer(p('.vscode/mcp.json'), 'servers', { type: 'stdio', ...server }), 'VS Code with Copilot']);
+  done.push(['.cursor/mcp.json', upsertServer(p('.cursor/mcp.json'), 'mcpServers', server), 'Cursor']);
   return {
     files: done.map(([file, state, who]) => ({ file, state, for: who })),
     commands: [
-      { for: 'Codex (once per machine)', cmd: 'codex mcp add snappcrawl -- snappcrawl mcp' },
-      { for: 'Claude Code (all projects)', cmd: 'claude mcp add --scope user snappcrawl -- snappcrawl mcp' },
+      { for: 'Codex (once per machine)', cmd: `codex mcp add snappcrawl -- ${cmd}` },
+      { for: 'Claude Code (all projects)', cmd: `claude mcp add --scope user snappcrawl -- ${cmd}` },
+      { for: 'Claude Code, with a skill that knows when to check', cmd: '/plugin marketplace add mace90/snappcrawl, then /plugin install snappcrawl@snappcrawl' },
     ],
   };
 }

@@ -35,3 +35,10 @@ test('init --agents: a marked block per file, MCP entries merged, nothing double
   fs.writeFileSync(p('.mcp.json'), '{ broken');
   assert.match(initAgents({ dir }).files.find((f) => f.file === '.mcp.json').state, /skipped/);
 });
+
+test('init --agents --npx: the MCP configs run snappcrawl through npx', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-'));
+  const r = initAgents({ dir, npx: true });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, '.mcp.json'), 'utf8')).mcpServers.snappcrawl, { command: 'npx', args: ['-y', 'snappcrawl', 'mcp'] });
+  assert.ok(r.commands.some((c) => c.cmd === 'codex mcp add snappcrawl -- npx -y snappcrawl mcp'));
+});

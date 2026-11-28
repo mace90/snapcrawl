@@ -1,13 +1,33 @@
 # snappcrawl
 
-**Crawl your iOS app, map every screen as a graph, and catch visual regressions between builds.**
+**Crawl your iOS app, map every screen, and catch what a change broke: for you, your coding agent and your CI.**
 
-snappcrawl drives the iOS Simulator or a real iPhone, taps through your app on its own, saves a screenshot of every screen it reaches and draws the result as a graph: screens are nodes, taps are edges. Crawl the next build and snappcrawl compares the two runs pixel by pixel: what changed, what is new, what crashed and what can no longer be reached.
+snappcrawl drives the iOS Simulator or a real iPhone, taps through your app on its own (no test scripts) and saves every screen it reaches. Then it compares two builds screen by screen: pixels, texts, buttons, navigation, crashes. One command compares your working tree with `main`:
 
 ```bash
-npm i -g github:mace90/snappcrawl
-snappcrawl
+snappcrawl check --build --base-ref main
 ```
+
+![main, your change, pixel diff](docs/compare.png)
+
+```
+changes · 11 screens · 10 same · 1 changed · 0 new · 0 broken
+s000  Hallo, Lena  changed  new text "Auswertung" · gone "Statistik"
+                            renamed "Statistik" → "Auswertung" · same place · leads to the same screen
+```
+
+## Install
+
+| For | |
+|---|---|
+| **Terminal** | `npm i -g github:mace90/snappcrawl`, then `snappcrawl` (checks the setup, opens the web UI) |
+| **Claude Code** | `/plugin marketplace add mace90/snappcrawl` and `/plugin install snappcrawl@snappcrawl`: MCP tools plus a skill that checks the app after UI changes |
+| **Codex** | `codex mcp add snappcrawl -- snappcrawl mcp` |
+| **Cursor, VS Code, Windsurf …** | MCP server `snappcrawl mcp` (stdio); `snappcrawl init --agents` writes the configs for a repository |
+| **Every agent in a repository** | `snappcrawl init --agents` (AGENTS.md, CLAUDE.md, Copilot instructions, `.mcp.json`, `.vscode/mcp.json`, `.cursor/mcp.json`) |
+| **GitHub Actions** | `uses: mace90/snappcrawl@main`: builds base and pull request, compares, comments ([below](#github-actions)) |
+
+Needs macOS with Xcode and Node 20+; for simulators idb (`snappcrawl setup` walks you through what is missing).
 
 `snappcrawl` checks your setup and opens the web UI. Everything else works from there: devices, WebDriverAgent for iPhones, crawls, review, reports and settings.
 
@@ -18,7 +38,7 @@ snappcrawl
       ┌┴┐   ╚════██║██║╚██╗██║██╔══██║██╔═══╝ ██╔═══╝ ██║     ██╔══██╗██╔══██║██║███╗██║██║
       └─┘   ███████║██║ ╚████║██║  ██║██║     ██║     ╚██████╗██║  ██║██║  ██║╚███╔███╔╝███████╗
             ╚══════╝╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝     ╚═╝      ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚══╝╚══╝ ╚══════╝
-  v0.3.0 · crawl your app, map every screen, diff builds
+  v0.4.0 · crawl your app, map every screen, diff builds
 
   system
   ✓ node            22.11.0
@@ -41,7 +61,7 @@ snappcrawl
   ui  → http://localhost:4747  (ctrl-c to stop)
 ```
 
-Narrower than 100 columns the banner is one line (`■ snappcrawl v0.3.0`); without a terminal, with `NO_COLOR` or in CI there is none.
+Narrower than 100 columns the banner is one line (`■ snappcrawl v0.4.0`); without a terminal, with `NO_COLOR` or in CI there is none.
 
 - **No test scripts.** The crawler finds screens itself through the accessibility tree.
 - **Simulator or iPhone.** Simulators through idb, iPhones over USB through WebDriverAgent, which snappcrawl builds, starts and stops for you.

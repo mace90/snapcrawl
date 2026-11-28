@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
+
+### Ready to publish
+- npm metadata (`mcpName`, keywords, author, `publishConfig`), `server.json` for the official MCP Registry, a Claude Code plugin (`.claude-plugin/plugin.json` with the MCP server, `skills/snappcrawl/SKILL.md` that tells Claude when and how to check an iOS app) and a marketplace in the same repository (`/plugin marketplace add mace90/snappcrawl`), a Homebrew formula template, and `RELEASING.md` with every publishing step in order. Nothing is published yet.
+- `snappcrawl init --agents --npx` writes `npx -y snappcrawl mcp` into the MCP configs, for repositories cloned without a global install.
+- README: install for every agent and CI at the top, a picture of a real comparison.
 
 ### Build from Xcode and CI
 - `check --build` (and `crawl --build`) builds the app in the folder for the Simulator (`xcodebuild`, workspace before project, the only or the like-named scheme), installs it and takes the bundle id from the build. `--project`, `--scheme`, `--configuration`, `--set KEY=VALUE`.

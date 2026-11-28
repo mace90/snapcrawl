@@ -114,6 +114,7 @@ ${t.bold('For agents and CI')}
   --no-input                  never wait for a person (automatic without a terminal or with CI set): exit 3
   mcp                         MCP server on stdio for coding agents (Claude Code, Codex, Copilot, Cursor …)
   init --agents               tell the agents in this repository about snappcrawl (AGENTS.md, CLAUDE.md, .mcp.json …)
+                              --npx: MCP configs run npx -y snappcrawl mcp (no global install needed)
 
 ${t.bold('Real iPhone')}
   1. Xcode → Settings → Accounts: sign in with your Apple ID (a free one works).
@@ -164,6 +165,7 @@ const { values: opt, positionals: pos } = parseArgs({
     markdown: { type: 'boolean' },
     'no-input': { type: 'boolean' },
     agents: { type: 'boolean' },
+    npx: { type: 'boolean' },
     build: { type: 'boolean' },
     'base-ref': { type: 'string' },
     project: { type: 'string' },
@@ -336,7 +338,7 @@ const commands = {
 
   async init() {
     if (opt.agents) {
-      const r = initAgents({ bundleId: opt.bundle || cfg.app.bundleId });
+      const r = initAgents({ bundleId: opt.bundle || cfg.app.bundleId, npx: !!opt.npx });
       if (opt.json) return emit(r);
       t.title('init --agents', 'coding agents in this repository know about snappcrawl');
       t.table(r.files.map((f) => [f.file, f.state.startsWith('unchanged') ? t.gray(f.state) : t.green(f.state), t.gray(f.for)]), { head: ['file', '', 'read by'] });
