@@ -53,17 +53,34 @@ function boxesFrom(diff, w, h) {
 // statusBarRatio: status bar height / screen height (both in points). The mask is applied in
 // image pixels, so it fits any screenshot scale (simulator 3x, real devices 2x or 3x).
 // minChangedRatio: below it no diff image is written (an unchanged screen never shows one).
-export function comparePng(fileA, fileB, outFile, { threshold = 0.1, ignoreStatusBar = true, statusBarRatio, minChangedRatio = 0 } = {}) {
+// ignore: areas left out ({ x, y, w, h } in points, or null for all of it); points: the screen
+// width in points, for the scale (3 if unknown).
+// ignoreHomeIndicator: the bar at the bottom of Face ID iPhones, which iOS tints after what was
+// on screen before (bottom 2.5 %, middle half of the width), system UI like the status bar.
+export function comparePng(fileA, fileB, outFile, { threshold = 0.1, ignoreStatusBar = true, statusBarRatio, minChangedRatio = 0, ignore = [], points, ignoreHomeIndicator = true } = {}) {
   const a = readPng(fileA);
   const b = readPng(fileB);
   if (a.width !== b.width || a.height !== b.height) {
     return { ratio: 1, boxes: [[0, 0, b.width, b.height]], width: b.width, height: b.height, sizeMismatch: true };
   }
   const { width: w, height: h } = a;
+  const scale = points > 0 ? w / points : 3;
   const bData = Buffer.from(b.data);
   if (ignoreStatusBar) {
     const rows = Math.min(h, Math.round(h * (statusBarRatio > 0 && statusBarRatio < 0.25 ? statusBarRatio : 0.065))); // default ~ the iOS status bar
     a.data.copy(bData, 0, 0, rows * w * 4);
+  }
+  if (ignoreHomeIndicator) {
+    const x0 = Math.round(w * 0.25);
+    const x1 = Math.round(w * 0.75);
+    for (let y = Math.round(h * 0.975); y < h; y++) a.data.copy(bData, (y * w + x0) * 4, (y * w + x0) * 4, (y * w + x1) * 4);
+  }
+  for (const r of ignore) {
+    const x0 = r ? Math.max(0, Math.floor(r.x * scale)) : 0;
+    const x1 = r ? Math.min(w, Math.ceil((r.x + r.w) * scale)) : w;
+    const y0 = r ? Math.max(0, Math.floor(r.y * scale)) : 0;
+    const y1 = r ? Math.min(h, Math.ceil((r.y + r.h) * scale)) : h;
+    for (let y = y0; y < y1 && x1 > x0; y++) a.data.copy(bData, (y * w + x0) * 4, (y * w + x0) * 4, (y * w + x1) * 4);
   }
   const out = new PNG({ width: w, height: h });
   const changed = pixelmatch(a.data, bData, out.data, w, h, { threshold, includeAA: false, alpha: 0.15, diffColor: [255, 0, 0], aaColor: [255, 255, 0] });
@@ -104,6 +121,10 @@ export function buildReport({ store, baseId, headId, cfg }) {
     return best;
   };
   const used = new Set();
+  // areas left out of the pixel comparison: the config's and the ones set in the UI or with
+  // `snappcrawl ignore`, for the app of either run, by screen name
+  const rules = [...(cfg.diff?.ignore || []), ...new Set([base.meta.app, head.meta.app])].flatMap((x) => (typeof x === 'string' ? store.ignoreFor?.(x) || [] : [x]));
+  const ignoreOf = (h, b) => rules.filter((r) => r.screen === h.name || r.screen === b.name).map((r) => r.area || null);
   const screens = [];
   const idMap = new Map(); // head screen id -> report id
   const baseIdMap = new Map(); // base screen id -> report id
@@ -123,7 +144,7 @@ export function buildReport({ store, baseId, headId, cfg }) {
     if (!b && !h.crash) b = similar(h);
     if (b) used.add(b.id);
 
-    const entry = { id: h.id, name: h.name, depth: h.depth, path: h.path.map((r) => r.label || r.type), elements: h.elements, baseImg: img(baseId, b), headImg: img(headId, h), diffImg: null, ratio: null, boxes: [], size: null };
+    const entry = { id: h.id, name: h.name, depth: h.depth, path: h.path.map((r) => r.label || r.type), elements: h.elements, baseImg: img(baseId, b), headImg: img(headId, h), diffImg: null, ratio: null, boxes: [], size: null, pt: h.size?.w ? [h.size.w, h.size.h] : null, baseName: b?.name || null };
     if (h.oneTime || b?.oneTime) entry.oneTime = true;
     if (h.crash) {
       Object.assign(entry, { status: 'bad', reason: 'crash', name: b ? b.name : 'Crash' });
@@ -135,7 +156,9 @@ export function buildReport({ store, baseId, headId, cfg }) {
       Object.assign(entry, { status: 'new', reason: 'was a crash in baseline' });
     } else {
       const file = `${h.id}.png`;
-      const r = comparePng(path.join(store.runDir(baseId), b.screenshot), path.join(store.runDir(headId), h.screenshot), path.join(outDir, file), { ...cfg.diff, statusBarRatio: statusBarRatio([[base, b], [head, h]]) });
+      const areas = ignoreOf(h, b);
+      const r = comparePng(path.join(store.runDir(baseId), b.screenshot), path.join(store.runDir(headId), h.screenshot), path.join(outDir, file), { ...cfg.diff, statusBarRatio: statusBarRatio([[base, b], [head, h]]), ignore: areas, points: h.size?.w || b.size?.w });
+      if (areas.length) entry.ignored = areas;
       const changed = r.ratio >= cfg.diff.minChangedRatio;
       Object.assign(entry, { status: changed ? 'changed' : 'same', ratio: r.ratio, boxes: changed ? r.boxes : [], size: [r.width, r.height], diffImg: changed ? `diffs/${baseId}__${headId}/${file}` : null, sizeMismatch: !!r.sizeMismatch });
     }
@@ -186,7 +209,7 @@ export function buildReport({ store, baseId, headId, cfg }) {
   const report = {
     version: 1,
     created: new Date().toISOString(),
-    base: { id: baseId, label: base.meta.label, device: base.meta.device?.name || '' },
+    base: { id: baseId, label: base.meta.label, device: base.meta.device?.name || '', app: base.meta.app },
     head: { id: headId, label: head.meta.label, device: head.meta.device?.name || '' },
     app: head.meta.app,
     appName: head.meta.appName || '',

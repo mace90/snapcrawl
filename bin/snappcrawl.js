@@ -12,7 +12,7 @@ import * as control from '../src/control.js';
 import { crawl, formatEta } from '../src/crawler.js';
 import { createDemo } from '../src/demo.js';
 import { buildReport } from '../src/diff.js';
-import { crawlPair } from '../src/pair.js';
+import { crawlPair, secondSimulator } from '../src/pair.js';
 import { listAllDevices, makeDriver } from '../src/drivers/index.js';
 import { DEFAULT_WDA_URL } from '../src/drivers/ios-device.js';
 import * as legacy from '../src/legacy.js';
@@ -55,6 +55,9 @@ ${t.bold('Crawl and compare')}
                               decide like in the UI · "all" = every open change
   report [base] [head]        write a standalone HTML report (--full: graph and images)
   notes [base] [head]         add model notes to the changes (needs an ai provider)
+  ignore <screen>             leave a screen out of the pixel comparison of its app
+                              --area x,y,w,h (points): only that area, e.g. an animation
+  ignore rm <n>               remove a rule · ignore alone lists them (--bundle: another app)
 
 ${t.bold('More')}
   ui                          open the web UI · --port <n> --no-open
@@ -68,6 +71,8 @@ ${t.bold('Crawl options')}
   --bundle <id>               app bundle id (or app.bundleId in ${LOCAL_FILE})
   --then <id>                 two builds installed side by side: crawl --bundle as the baseline,
                               then this app against it, then compare (e.g. --bundle com.firma.app --then com.firma.app.beta)
+  --parallel <simulator>      with --then: the second build on this simulator, both at the same time
+                              (about half the time; the test build does not follow the baseline)
   --against <id>              compare this run with the baseline of another app (the second build)
   --udid <udid|name>          simulator (default: the booted one)
   --device <udid|name>        real iPhone over USB
@@ -118,6 +123,8 @@ const { values: opt, positionals: pos } = parseArgs({
     reinstall: { type: 'string' },
     'max-per-list': { type: 'string' },
     then: { type: 'string' },
+    area: { type: 'string' },
+    parallel: { type: 'string' },
     against: { type: 'string' },
     team: { type: 'string' },
     'bundle-id': { type: 'string' },
@@ -173,6 +180,8 @@ function printReport(r) {
     say(`\n  ${t.bold('buttons')}`);
     for (const x of hints) for (const l of hintLines(x)) say(`  ${t.gray(x.id)}  ${x.name} · ${l}`);
   }
+  const ign = r.screens.filter((x) => x.ignored?.length);
+  if (ign.length) say(`\n  ${t.gray(`left out of the pixel comparison: ${ign.map((x) => `${x.name} (${x.ignored.some((a) => !a) ? 'all' : `${x.ignored.length} area${x.ignored.length === 1 ? '' : 's'}`})`).join(', ')} · snappcrawl ignore`)}`);
   say(`\n  ${t.gray('review:')} snappcrawl  ${t.gray('(web UI) · or')} snappcrawl review\n`);
 }
 
@@ -292,6 +301,16 @@ const commands = {
     const driver = makeDriver({ ...o, bundleId: cfg.app.bundleId });
     t.title('crawl', `${opt.then ? `${cfg.app.bundleId} then ${opt.then}` : cfg.app.bundleId} · ${driver.platform === 'ios-device' ? 'iPhone' : 'simulator'} · depth ≤ ${cfg.crawl.maxDepth} · ≤ ${cfg.crawl.maxScreens} screens`);
     if (driver.platform === 'ios-device') await control.ensureWda({ udid: o.udid, url: wdaUrl(), log: t.logLine });
+    if (opt.parallel && !opt.then) throw expected('--parallel <simulator> crawls the --then build on a second simulator · it needs --then');
+    let second = null;
+    if (opt.parallel) {
+      try {
+        second = await secondSimulator(driver, opt.parallel, opt.then);
+      } catch (e) {
+        throw expected(e.message);
+      }
+      say(t.gray(`  1 ${cfg.app.bundleId} on ${driver.name} · 2 ${opt.then} on ${second.name}, at the same time\n`));
+    }
 
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     let stop = false;
@@ -329,7 +348,7 @@ const commands = {
     let pair = null;
     try {
       if (opt.then) {
-        pair = await crawlPair({ driverFor: (bundleId) => (bundleId === cfg.app.bundleId ? driver : makeDriver({ ...o, bundleId })), cfg, store, io, base: cfg.app.bundleId, head: opt.then, label: opt.label || '' });
+        pair = await crawlPair({ driverFor: (bundleId) => (bundleId === cfg.app.bundleId ? driver : second || makeDriver({ ...o, bundleId })), cfg, store, io, base: cfg.app.bundleId, head: opt.then, label: opt.label || '', parallel: !!second });
         atlas = pair.head || pair.base;
       } else atlas = await crawl({ driver, cfg, store, io, label: opt.label || '' });
     } finally {
@@ -421,6 +440,34 @@ const commands = {
     say();
     printState(r);
     say(`\n  ${t.gray('decide:')} snappcrawl review <id|all> <approve|reject|undo>\n`);
+  },
+
+  async ignore() {
+    const app = cfg.app.bundleId;
+    if (pos[1] === 'rm') {
+      const n = Number(pos[2]);
+      if (!Number.isInteger(n)) throw expected('usage · snappcrawl ignore rm <n> · the numbers are in: snappcrawl ignore');
+      store.removeIgnore(app, n - 1);
+      say('  ' + t.ok(`rule ${n} removed`));
+    } else if (pos[1]) {
+      let area = null;
+      if (opt.area) {
+        const v = String(opt.area).split(/[ ,]+/).map(Number);
+        if (v.length !== 4) throw expected('--area x,y,w,h in points, e.g. --area 0,120,393,300');
+        area = { x: v[0], y: v[1], w: v[2], h: v[3] };
+      }
+      try {
+        store.addIgnore(app, { screen: pos.slice(1).join(' '), area });
+      } catch (e) {
+        throw expected(e.message);
+      }
+      say('  ' + t.ok(`${area ? 'area ignored' : 'pixels ignored'} on "${pos.slice(1).join(' ')}" · ${app} · from the next comparison`));
+    }
+    const rules = store.ignoreFor(app);
+    t.title('ignore', `${app} · areas left out of the pixel comparison`);
+    if (rules.length) t.table(rules.map((r, i) => [String(i + 1), r.screen, r.area ? `${r.area.x},${r.area.y} · ${r.area.w}×${r.area.h} pt` : 'the whole screen']), { head: ['n', 'screen', 'area'] });
+    else say(t.gray('  none · snappcrawl ignore "<screen>" [--area x,y,w,h]'));
+    say();
   },
 
   async report() {

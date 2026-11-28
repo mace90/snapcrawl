@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Faster on the simulator: idb_companion directly
+- Reading the screen, tapping and screenshots go straight to `idb_companion` over its local socket (gRPC over HTTP/2 with Node's own `http2`, no new dependency) instead of starting the `idb` command line tool each time: a read takes 0.09 instead of 0.3–0.44 s, a tap 0.1 instead of 0.4 s, a screenshot 0.28 instead of 0.58 s. Same elements, pixel-identical pictures. If the companion cannot be reached or answers twice with an error, the crawl goes on with the `idb` command line; `SNAPPCRAWL_IDB=cli` always uses it.
+- After a tap the screen is read after a third of `settleMs` and then until it stands still. The full `settleMs` is only waited for while the screen still looks as before the tap, so a transition that starts late is not missed.
+- Following the baseline, a tap whose baseline screen is slow to come (the app asks its server first) gets a little longer before it counts as leading elsewhere.
+- In the iOS Settings (depth 3, 50 screens, following the baseline): 5:27 instead of 7:11 minutes. Compared with the baseline: 50 of 50 screens found again, nothing new or unreachable; left as changed is only the animated *Aktionstaste*.
+
+### Steadier pictures
+- A new screen's picture is kept once a second picture a moment later agrees with it and it shows no scroll bar. iOS shows a list's scroll bar for a moment when the list appears or grows; depending on timing it was in one run's picture and not in the other's. The same check waits out the last points of a sheet sliding in. A screen that never stands still (an animation) keeps its last picture after about 3 s.
+- The home indicator at the bottom is left out of the comparison like the status bar (`diff.ignoreHomeIndicator`, on by default): iOS 26 tints it after the screen before, so it differed between runs.
+- Fix: an app that reopens on the screen it was left on (the iOS Settings do) was taken for a new launch screen, and everything before it for a one-time intro. Now the crawler goes back with the app's back button.
+
+### Ignoring areas
+- Per app and screen name, an area or a whole screen can be left out of the pixel comparison: Compare → *Ignore an area* (drag over the picture) or *Ignore the screen*; `snappcrawl ignore <screen> [--area x,y,w,h]`, `ignore rm <n>`; `diff.ignore` in the config. Stored in `.snappcrawl/ignore.json`, in points.
+
+### Two builds at the same time
+- `crawl --then <bundle> --parallel <simulator>` (UI: *the second build runs → at the same time on …*) crawls the test build on a second simulator while the baseline is crawled, about half the time. The test build does not follow the baseline then; its screens are matched afterwards.
+
 ### Faster
 - Going to a screen without a restart: from the screen that is showing, or after up to three *Back* taps, the crawler follows the taps from a screen on the way. A relaunch is only the fallback. In the iOS Settings (depth 3, 50 screens): 5 restarts instead of 18, about 7 instead of 9 minutes. The comparison of two runs: 50 of 50 screens found again.
 - A *Back* that changes nothing is not tapped again: the app is restarted at once.

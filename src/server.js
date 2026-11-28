@@ -6,7 +6,7 @@ import { annotate, aiReady } from './ai.js';
 import { loadConfig } from './config.js';
 import * as control from './control.js';
 import { crawl } from './crawler.js';
-import { crawlPair } from './pair.js';
+import { crawlPair, secondSimulator } from './pair.js';
 import { buildReport } from './diff.js';
 import { runChecks } from './doctor.js';
 import { makeDriver } from './drivers/index.js';
@@ -165,6 +165,21 @@ export function createRoutes({ store, cfg, version, driverFactory = makeDriver, 
       store.writeReport(report);
       return { review: report.review };
     },
+    'GET /api/ignore': (q) => ({ rules: store.ignoreFor(q.get('app') || cfg.app.bundleId) }),
+    'POST /api/ignore': (q, body) => {
+      try {
+        return { rules: store.addIgnore(String(body.app || ''), { screen: body.screen, area: body.area || null }) };
+      } catch (e) {
+        throw bad(e.message);
+      }
+    },
+    'POST /api/ignore/remove': (q, body) => {
+      try {
+        return { rules: store.removeIgnore(String(body.app || ''), Number(body.index)) };
+      } catch (e) {
+        throw bad(e.message);
+      }
+    },
     'POST /api/baseline': (q, body) => {
       store.setBaseline(body.run);
       return { baselines: store.readBaselines() };
@@ -188,10 +203,19 @@ export function createRoutes({ store, cfg, version, driverFactory = makeDriver, 
       const platform = body.platform || run.device.platform;
       const udid = body.udid || (platform === run.device.platform ? run.device.udid : '');
       const driverFor = (bundleId) => driverFactory({ platform, udid, bundleId, wdaUrl: run.device.wdaUrl });
+      const parallel = then ? String(body.parallel || '').trim() : '';
+      if (parallel && platform !== 'ios-sim') throw bad('parallel crawls need simulators · on an iPhone the two builds run one after the other');
+      // one driver for the baseline app, so a second simulator never takes its place
       Object.assign(live, { running: true, runId: null, ask: null, log: [], abort: false });
       // on an iPhone, WebDriverAgent is started first when it is not running
       (platform === 'ios-device' && !body.noWdaStart ? control.ensureWda({ udid, url: run.device.wdaUrl || DEFAULT_WDA_URL, log: io.log }) : Promise.resolve())
-        .then(() => (then ? crawlPair({ driverFor, cfg: run, store, io, base: run.app.bundleId, head: then, label: body.label || '' }).then((p) => p.head || p.base) : crawl({ driver: driverFor(run.app.bundleId), cfg: run, store, io, label: body.label || '' })))
+        .then(async () => {
+          const first = driverFor(run.app.bundleId);
+          if (!then) return crawl({ driver: first, cfg: run, store, io, label: body.label || '' });
+          const second = parallel ? await secondSimulator(first, parallel, then) : null;
+          const p = await crawlPair({ driverFor: (b) => (b === run.app.bundleId ? first : second || driverFor(b)), cfg: run, store, io, base: run.app.bundleId, head: then, label: body.label || '', parallel: !!second });
+          return p.head || p.base;
+        })
         .then((atlas) => {
           if (!then && !run.crawl.against && atlas.meta.status === 'done' && !store.baselineFor(atlas.meta.app)) {
             store.setBaseline(atlas.meta.id);

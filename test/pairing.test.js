@@ -111,3 +111,34 @@ test('against: a run without a baseline for the other app stops with a hint', as
   assert.equal(atlas.meta.status, 'failed');
   assert.match(atlas.meta.error, /no baseline for com\.other\.app · crawl it first/);
 });
+
+test('two builds at once on two simulators: both crawled in parallel, the test build not following, then compared', async () => {
+  const { crawlPair } = await import('../src/pair.js');
+  const store = new Store(fs.mkdtempSync(path.join(os.tmpdir(), 'snappcrawl-'))).ensure();
+  const v1 = new FakeApp();
+  const v2 = new FakeApp({ changes: { home: { Profil: { label: 'Mein Profil' } } } });
+  // both crawls must be under way at the same time
+  let open = 0;
+  let both = false;
+  for (const app of [v1, v2]) {
+    const launch = app.launch.bind(app);
+    const els = app.elements.bind(app);
+    app.launch = async () => (open++, launch());
+    app.elements = async () => {
+      await new Promise((r) => setImmediate(r));
+      if (open === 2) both = true;
+      return els();
+    };
+  }
+  const logs = [];
+  const { base, head, report: r } = await crawlPair({ driverFor: (id) => (id === 'com.pulse.app' ? v1 : v2), cfg: config(v1), store, io: { log: (l, m) => logs.push(m), ask: async () => '' }, base: 'com.pulse.app', head: 'com.pulse.beta', parallel: true });
+  assert.ok(both, 'the two crawls overlapped');
+  assert.equal(store.baselineFor('com.pulse.app'), base.meta.id);
+  assert.equal(head.meta.followed, undefined, 'nothing to follow yet');
+  assert.deepEqual([head.meta.against, head.meta.baseline, head.meta.parallel], ['com.pulse.app', base.meta.id, true]);
+  assert.equal(store.readRun(head.meta.id).meta.baseline, base.meta.id, 'saved');
+  assert.equal(r.summary.new, 0);
+  assert.equal(home(r).hints.renamed[0].to, 'Mein Profil');
+  assert.ok(logs.some((m) => m.startsWith('1 │ ')) && logs.some((m) => m.startsWith('2 │ ')));
+  assert.deepEqual(store.defaultPair(), { base: base.meta.id, head: head.meta.id });
+});

@@ -5,6 +5,8 @@ import { signature, similarity } from './signature.js';
 import { DEFAULT_DISMISS, alertFromElements, consentAccept, dismissButton, introButtons, isConsent, isPermissionAlert, isWebLink, pickButton } from './interrupts.js';
 import { totp } from './totp.js';
 import { describeMove, pairActions } from './pairing.js';
+import { fileHasScrollBar } from './scrollbar.js';
+import { comparePng } from './diff.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -306,7 +308,7 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
   async function observeSettled() {
     let o = await observe();
     for (let i = 0; i < 5; i++) {
-      await sleep(c.settleMs * 0.5);
+      await sleep(c.settleMs / 3);
       const n = await observe();
       const still = layout(n.els) === layout(o.els);
       o = n;
@@ -314,6 +316,21 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
       if (still && rootApp && appLabel(o.els) && appLabel(o.els) !== rootApp) return o; // another app in front (a crash: the home screen)
     }
     return o;
+  }
+  // After a tap: a short wait, then reads until the layout stands still. Most taps start their
+  // transition at once, so this is done after about half of settleMs. Only while the screen still
+  // looks as before the tap is the full settleMs waited for, so a transition that starts late
+  // (the app asks its server first) is not taken for a tap that did nothing.
+  async function afterTap(before) {
+    const t0 = Date.now();
+    await sleep(c.settleMs / 3);
+    let n = await observeSettled();
+    const left = c.settleMs - (Date.now() - t0);
+    if (left > 0 && before && layout(n.els) === layout(before.els)) {
+      await sleep(left);
+      n = await observeSettled();
+    }
+    return n;
   }
 
   // Tap away onboarding sheets and hints until a wanted screen (predicate) is on screen, or
@@ -592,6 +609,21 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
     let o = await ensureAuth(await observeSettled());
     const hit = (x) => targets.some((t) => is(x, t));
     if (hit(o)) return o;
+    // Apps that remember where they were (iOS Settings) open on that screen again: a screen
+    // with a back button. Back to the path, rather than taking it for a new launch screen
+    // (an intro shown once ends on a screen without a back button).
+    for (let i = 0; i < 4 && !hit(o) && !is(o, entry); i++) {
+      const k = known(o);
+      const back = !k?.oneTime && o.els.find((e) => /button/i.test(e.type) && (e.back || /^(back|zurück)$/i.test(e.label)));
+      if (!back) break;
+      if (i === 0) log('INFO', `opened on ${k ? `${k.id} "${clip(k.name, 40)}"` : `"${clip(nameOf(o.els, screenSize(o.els)), 40)}"`} · it remembers where it was · going back`);
+      const before = o;
+      await tapEl(back);
+      await settle();
+      o = await observeSettled();
+      if (o.fp === before.fp) break;
+    }
+    if (hit(o)) return o;
     o = await dismissInterstitials(o, hit, 'after launch');
     if (!hit(o) && isConsent(o.els)) {
       if (c.prepare) {
@@ -664,7 +696,22 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
     const size = screenSize(o.els);
     const id = `s${String(atlas.screens.length).padStart(3, '0')}`;
     const file = `screens/${id}.png`;
-    await driver.screenshot(path.join(dir, file));
+    const shot = path.join(dir, file);
+    await driver.screenshot(shot);
+    // A picture that differs between runs only by timing is noise in every comparison. It is kept
+    // once a second picture a moment later agrees with it and it shows no scroll bar (iOS shows a
+    // list's scroll bar for a moment when the list appears or grows). This also waits out the
+    // last points of a sheet sliding in and system colors fading. A screen that never stands
+    // still (an animation) keeps its last picture, after about 3 s.
+    for (let i = 0; i < 6 && c.settleMs > 0; i++) {
+      const bar = fileHasScrollBar(shot, size?.w);
+      await sleep(bar ? 500 : 200);
+      const again = `${shot}.next.png`;
+      await driver.screenshot(again);
+      const still = !bar && comparePng(shot, again, null, { threshold: cfg.diff.threshold, minChangedRatio: Infinity }).ratio < cfg.diff.minChangedRatio;
+      fs.renameSync(again, shot);
+      if (still) break;
+    }
     const consent = isConsent(o.els);
     // with --intro skip or fresh you asked for cookie banners to be accepted: the banner is
     // kept as a screen whose only action is accepting it
@@ -920,10 +967,9 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
         if (act.tab) tabs.set(tabKey(act), null);
         event('tap', { screen: s.id, x: p.x, y: p.y, size: s.size });
         await driver.tap(p.x, p.y);
-        await settle();
 
         // still the app's own screen: neither crashed nor left, no need to ask for the app state
-        let n = await observeSettled();
+        let n = await afterTap(o);
         const state = rootApp && appLabel(n.els) === rootApp ? 4 : await appState();
         if (state !== 4 && state > 1) {
           // Safari or another app came to the front: note it, go back, register nothing
@@ -960,15 +1006,21 @@ export async function crawl({ driver, cfg, store, io, label = '' }) {
         // button: where it leads is kept as it is, no second try
         const renamed = pairFor(s, act)?.kind === 'renamed';
         if (exp && renamed) log('INFO', hitsExp(n) ? `"${clip(act.label)}" on ${s.id} leads where "${clip(pairFor(s, act).base.label)}" led · the same button, renamed` : `"${clip(act.label)}" on ${s.id} leads elsewhere than "${clip(pairFor(s, act).base.label)}" did · another button at the same place`);
+        // the baseline's screen may only be slow to come (the app asks its server first): a while
+        // longer before calling it a different place
+        for (const t0 = Date.now(); exp && !renamed && exp.id !== s.base && !hitsExp(n) && Date.now() - t0 < c.settleMs * 2.5; ) {
+          await sleep(c.settleMs / 3);
+          n = await ensureAuth(await observeSettled());
+        }
         if (exp && !renamed && exp.id !== s.base && !hitsExp(n)) {
           log('INFO', `tap "${clip(act.label || act.type)}" on ${s.id} led elsewhere than in the baseline ("${exp.name}") · once more after a fresh start`);
           const o2 = await goTo(s, { fresh: true });
           if (o2) {
             const p2 = locate(o2.els, act);
             await driver.tap(p2.x, p2.y);
-            await settle();
-            if ((await appState()) === 4) {
-              n = await ensureAuth(await observeSettled());
+            const n2 = await afterTap(o2);
+            if ((rootApp && appLabel(n2.els) === rootApp) || (await appState()) === 4) {
+              n = await ensureAuth(n2);
               log('INFO', hitsExp(n) ? `retry on ${s.id} · as in the baseline` : `retry on ${s.id} · different again, kept as it is`);
             }
           }

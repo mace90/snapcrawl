@@ -47,6 +47,8 @@ export const DEFAULTS = {
     threshold: 0.1, // per-pixel color tolerance (pixelmatch)
     minChangedRatio: 0.0005, // below this share of changed pixels a screen counts as unchanged
     ignoreStatusBar: true,
+    ignoreHomeIndicator: true, // the bar at the bottom, tinted by iOS after the screen before
+    ignore: [], // areas left out of the comparison: { screen: "Aktionstaste", x, y, w, h } in points
   },
   ai: {
     provider: 'none', // none | anthropic | openai | ollama

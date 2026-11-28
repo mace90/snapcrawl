@@ -51,8 +51,8 @@ const sheetEls = () => [text('Neu: Watchlists', 300), text('Behalte deine Kurse 
 const consentEls = () => [text('Ihre Privatsphäre ist uns wichtig', 200), text('Wir verwenden Cookies, wenn Sie auf Alle akzeptieren tippen.', 260), btn('Alle akzeptieren', 600), btn('Alle ablehnen', 660), { ...btn('Datenschutzerklärung', 720, 'Link'), web: true }];
 
 export class FakeApp {
-  constructor({ user = 'lena@pulse.app', pass = 'secret', secret = 'JBSWY3DPEHPK3PXP', sheet = false, consent = false, alert = false, external = false, ad = false, onboarding = false, feed = false, flaky = 0, extra = false, lag = 0, changes = {}, pin = null } = {}) {
-    Object.assign(this, { user, pass, secret, sheet, consent, alertOn: alert, external, ad, onboarding, feed, flaky, extra, lag, changes, pin });
+  constructor({ user = 'lena@pulse.app', pass = 'secret', secret = 'JBSWY3DPEHPK3PXP', sheet = false, consent = false, alert = false, external = false, ad = false, onboarding = false, feed = false, flaky = 0, extra = false, lag = 0, changes = {}, pin = null, restore = false } = {}) {
+    Object.assign(this, { user, pass, secret, sheet, consent, alertOn: alert, external, ad, onboarding, feed, flaky, extra, lag, changes, pin, restore });
     this.pinFails = 0;
     this.pinOk = 0;
     this.pinTyped = '';
@@ -87,9 +87,12 @@ export class FakeApp {
     return [{ bundleId: 'com.pulse.app', name: 'Pulse' }];
   }
   async launch() {
-    this.running = true;
     this.front = 'app';
-    this.stack = ['splash'];
+    // restore: like iOS Settings, a logged-in app reopens on the screen it was left on
+    const keep = this.restore && this.running && this.loggedIn && this.stack.length > 2;
+    if (keep) this.reopened = (this.reopened || 0) + 1;
+    else this.stack = ['splash'];
+    this.running = true;
     this.fields = {};
     this.overlay = this.onboarding && !this.onboarded ? 'welcome' : this.consent && !this.consentDecision ? 'consent' : this.sheet === 'always' || (this.sheet && !this.sheetsShown) ? 'sheet' : null;
     if (this.overlay === 'sheet') this.sheetsShown++;
@@ -181,7 +184,8 @@ export class FakeApp {
     return els;
   }
   async tap(x, y) {
-    const el = (await this.elements()).filter((e) => e.type !== 'Application' && e.type !== 'Alert').find((e) => x >= e.x && x <= e.x + e.w && y >= e.y && y <= e.y + e.h);
+    const hits = (await this.elements()).filter((e) => e.type !== 'Application' && e.type !== 'Alert').filter((e) => x >= e.x && x <= e.x + e.w && y >= e.y && y <= e.y + e.h);
+    const el = (this.restore && hits.find((e) => e.type !== 'StaticText')) || hits[0]; // restore: a title over the back button does not take its tap
     if (!el) return;
     if (this.alertVisible && !el.alert) return; // the prompt blocks the app
     this.taps.push(el.label);

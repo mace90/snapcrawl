@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { Companion, companionAddress } from './idb-grpc.js';
 
 const exec = promisify(execFile);
 
@@ -84,6 +85,30 @@ export class IosSimulator {
     this.platform = 'ios-sim';
     this.udid = udid;
     this.bundleId = bundleId;
+    this.companion = null; // direct gRPC line to idb_companion, else the idb command line
+    this.transport = 'idb';
+    this.misses = 0;
+  }
+
+  // The fast way when the companion can be reached, the idb command line otherwise.
+  // SNAPPCRAWL_IDB=cli always takes the command line.
+  async fast(name, viaCompanion, viaCli) {
+    if (this.companion) {
+      try {
+        const r = await viaCompanion(this.companion);
+        this.misses = 0;
+        return r;
+      } catch (e) {
+        // twice in a row: the companion is gone or speaks another version · the command line from now on
+        if (++this.misses >= 2) {
+          this.companion.close();
+          this.companion = null;
+          this.transport = 'idb';
+          this.fellBack = `${name}: ${e.message}`;
+        }
+      }
+    }
+    return viaCli();
   }
 
   async resolve() {
@@ -93,6 +118,17 @@ export class IosSimulator {
     if (sim.state !== 'Booted') await sh('xcrun', ['simctl', 'boot', sim.udid]);
     Object.assign(this, { udid: sim.udid, name: sim.name, runtime: sim.runtime });
     await sh('idb', ['connect', this.udid]).catch(() => {});
+    const address = process.env.SNAPPCRAWL_IDB === 'cli' ? null : companionAddress(this.udid);
+    if (address) {
+      const c = new Companion(address);
+      try {
+        await c.describeAll(); // answers? then every read, tap and screenshot goes this way
+        this.companion = c;
+        this.transport = 'idb_companion';
+      } catch {
+        c.close();
+      }
+    }
     return this;
   }
 
@@ -148,12 +184,13 @@ export class IosSimulator {
   }
 
   async elements() {
-    const raw = parseJsonish(await sh('idb', ['ui', 'describe-all', '--udid', this.udid, '--json']));
+    const raw = await this.fast('describe', (c) => c.describeAll(), async () => parseJsonish(await sh('idb', ['ui', 'describe-all', '--udid', this.udid, '--json'])));
     return (Array.isArray(raw) ? raw : [raw]).map(normalize).filter(Boolean);
   }
 
   async tap(x, y) {
-    await sh('idb', ['ui', 'tap', '--udid', this.udid, String(Math.round(x)), String(Math.round(y))]);
+    const [px, py] = [Math.round(x), Math.round(y)];
+    await this.fast('tap', (c) => c.tap(px, py), () => sh('idb', ['ui', 'tap', '--udid', this.udid, String(px), String(py)]));
   }
 
   async type(text) {
@@ -161,6 +198,10 @@ export class IosSimulator {
   }
 
   async screenshot(file) {
-    await sh('xcrun', ['simctl', 'io', this.udid, 'screenshot', '--type=png', file]);
+    await this.fast('screenshot', async (c) => fs.writeFileSync(file, await c.screenshot()), () => sh('xcrun', ['simctl', 'io', this.udid, 'screenshot', '--type=png', file]));
+  }
+
+  close() {
+    this.companion?.close();
   }
 }

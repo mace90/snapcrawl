@@ -193,6 +193,7 @@ Every action has a place in the web UI, a CLI command and an API route, all call
 | List installed apps | Setup → App · installed apps | `snappcrawl apps` | `GET /api/apps` |
 | Crawl with all options | Setup → Start crawl | `snappcrawl crawl` | `POST /api/crawl` |
 | Crawl a baseline build, then a second build against it | Setup → App · then crawl | `snappcrawl crawl --then <bundle>` | `POST /api/crawl` (`then`) |
+| … both at once on two simulators | Setup → App · the second build runs | `snappcrawl crawl --then <bundle> --parallel <simulator>` | `POST /api/crawl` (`then`, `parallel`) |
 | Continue after Prepare, a login or a code | Run → Continue | `snappcrawl crawl --prepare` | `POST /api/answer` |
 | Stop a running crawl | Run → Stop | `snappcrawl crawl` | `POST /api/stop` |
 | List runs | Run → runs | `snappcrawl runs` | `GET /api/runs` |
@@ -202,6 +203,8 @@ Every action has a place in the web UI, a CLI command and an API route, all call
 | Approve, reject, undo | Compare → Approve / Reject / Undo | `snappcrawl review <id\|all> <approve\|reject\|undo>` | `POST /api/review` |
 | Export a report (summary or full) | Compare → Export | `snappcrawl report` | `GET /api/export` |
 | Model notes for changes | Compare → Notes | `snappcrawl notes` | `POST /api/notes` |
+| Leave a screen or an area out of the pixel comparison | Compare → Ignore an area / Ignore the screen | `snappcrawl ignore <screen>` | `POST /api/ignore` |
+| Compare an ignored area again | Compare → ignored · Remove | `snappcrawl ignore rm <n>` | `POST /api/ignore/remove` |
 | Settings (AI provider, model, key) | Settings → AI | `snappcrawl config set <key> <value>` | `POST /api/config` |
 
 Without arguments, `diff`, `review` and `report` (and the Compare tab) take the app of the newest run and compare its baseline with the newest run of that app created after the baseline. If nothing is newer than the baseline, they stop with `<App>: nothing newer than the baseline <label>` instead of comparing an older run. Pass `[base] [head]` run ids to compare any two runs, in either direction. Decisions are stored in the diff's `report.json`, so the UI and the CLI see the same review.
@@ -245,6 +248,14 @@ The test build gets no baseline of its own. `diff`, `review`, `report` and the C
 
 The crawl options apply to both runs. `--reinstall` installs one build and does not go with `--then`; use `--intro fresh`, which resets each app before its run.
 
+**Both at once.** With a second simulator the two builds are crawled at the same time, which takes about half as long:
+
+```bash
+snappcrawl crawl --bundle com.acme.app --udid "iPhone 17" --then com.acme.app.beta --parallel "iPhone 17 Pro"
+```
+
+The test build has to be installed on the second simulator (it is booted if needed). The price: it cannot [follow the baseline](#comparable-runs-following-the-baseline), which is only being made, so its screens are matched afterwards like in any comparison (by path, structure and similarity). For the most exact comparison, leave out `--parallel`. In the web UI: **Setup → App → the second build runs → at the same time on …**. The log marks the lines of the two crawls with `1 │` and `2 │`.
+
 ## Comparable runs: following the baseline
 
 Two crawls of the same app rarely click through it the same way on their own. An animation that is not finished, a sheet that is still half open or a list that loaded a moment later is enough. One tap then lands on another view, that view takes a place in the screen limit, and everything after it shifts: a few screens turn up as *new*, others as *unreachable*, though nothing changed.
@@ -286,6 +297,16 @@ removed "Hilfe"
 List cells and links pair the same way, but give no hints: in a list the content moves and changes on its own. The hints also work for runs that did not follow the baseline, as long as the screens were matched.
 
 `--no-follow` (`crawl.follow: false`, UI: uncheck *Follow the baseline*) explores freely as if there were no baseline.
+
+## Ignoring areas
+
+Some screens change on every run: an animation, a video, a live chart, a random tip. To keep them from showing up as *changed* every time, leave them out of the pixel comparison, per app and screen name:
+
+- **Web UI:** Compare → select the screen → *Ignore an area* and drag over the head picture, or *Ignore the screen*. The comparison is made again at once; review decisions stay. Ignored areas are drawn in gray, *Remove* compares them again.
+- **CLI:** `snappcrawl ignore "Aktionstaste" --area 0,120,402,560` (x, y, width, height in points), `snappcrawl ignore "Aktionstaste"` for the whole screen, `snappcrawl ignore` lists the rules, `snappcrawl ignore rm 2` removes one. `--bundle` picks another app.
+- **Config:** `"diff": { "ignore": [{ "screen": "Aktionstaste", "area": { "x": 0, "y": 120, "w": 402, "h": 560 } }] }` for rules kept in the repository.
+
+The rules are stored in `.snappcrawl/ignore.json`. An ignored screen is still matched, its buttons are still checked, and a crash or an unreachable screen still counts; only its pixels are not compared. Areas are in points, so they fit any device.
 
 ## Reports
 
@@ -465,7 +486,7 @@ Both options are also in the web UI under **Setup → Limits and interruptions**
 | `crawl.maxDepth` | `8` | taps away from the first screen |
 | `crawl.maxScreens` | `200` | stop after this many screens |
 | `crawl.timeLimitMin` | `20` | stop after this many minutes |
-| `crawl.settleMs` | `900` | wait after each tap before reading the screen |
+| `crawl.settleMs` | `900` | the longest wait after a tap while the screen still looks as before (most taps are read after about half of it, see [How it works](#how-it-works)) |
 | `crawl.matchThreshold` | `0.8` | similarity (0–1) from which two views count as the same screen |
 | `crawl.prepare` | `false` | pause after launch for manual preparation (`--prepare`) |
 | `crawl.dismiss` | DE + EN list | button labels that close onboarding sheets and hints |
@@ -479,6 +500,8 @@ Both options are also in the web UI under **Setup → Limits and interruptions**
 | `diff.threshold` | `0.1` | per-pixel colour tolerance (0–1) |
 | `diff.minChangedRatio` | `0.0005` | share of changed pixels below which a screen counts as unchanged |
 | `diff.ignoreStatusBar` | `true` | masks the clock and battery area |
+| `diff.ignoreHomeIndicator` | `true` | masks the home indicator at the bottom, which iOS tints after the screen before |
+| `diff.ignore` | `[]` | areas left out of the comparison, see [Ignoring areas](#ignoring-areas) |
 
 ## Model notes (optional)
 
@@ -511,13 +534,14 @@ Then `snappcrawl diff --ai`, or **Notes** in the web UI. Global settings live in
 | `snappcrawl boot <simulator>` | boot a simulator |
 | `snappcrawl apps` | apps on the simulator · `--device` for an iPhone |
 | `snappcrawl wda setup \| start \| stop \| status` | WebDriverAgent for iPhones · `--team --bundle-id --udid` |
-| `snappcrawl crawl` | explore the app · `--bundle --then --against --udid --device --label --max-depth --max-screens --minutes --mfa --prepare --alerts --dismiss --block --prefer --max-per-list --intro --reinstall --no-follow --diff` |
+| `snappcrawl crawl` | explore the app · `--bundle --then --parallel --against --udid --device --label --max-depth --max-screens --minutes --mfa --prepare --alerts --dismiss --block --prefer --max-per-list --intro --reinstall --no-follow --diff` |
 | `snappcrawl runs` · `runs rm <run>` | list runs, delete one with its comparisons |
 | `snappcrawl baseline [run]` | show baselines, or make a run the baseline of its app |
 | `snappcrawl diff [base] [head]` | compare runs (default: baseline vs the newest run after it, or the pair of `crawl --then`) · `--ai` |
 | `snappcrawl review …` | list changes, or `review <id\|all> <approve\|reject\|undo>` |
 | `snappcrawl report [base] [head]` | HTML report to `.snappcrawl/reports/` · `--full --out <file>` |
 | `snappcrawl notes [base] [head]` | model notes for the changes |
+| `snappcrawl ignore [screen]` · `ignore rm <n>` | leave a screen (or `--area x,y,w,h`) out of the pixel comparison, list or remove rules |
 | `snappcrawl config` · `config set <key> <value>` | show or change global settings |
 | `snappcrawl init` · `demo` · `migrate` · `help` | config file, sample data, move old data, help |
 
@@ -525,8 +549,8 @@ Then `snappcrawl diff --ai`, or **Notes** in the web UI. Global settings live in
 
 ## How it works
 
-1. **Explore.** After launch (and login), the crawler reads the accessibility tree with `idb ui describe-all`, collects tappable elements (buttons, cells, tabs, links), and explores breadth-first with navigation first (see [Crawl order](#crawl-order)). To get back to a screen it first tries without a restart: from the screen that is showing, or after tapping *Back* up to three times, it follows the taps from a screen on the way. Only when that fails does it relaunch the app and replay the taps that led there. A read of the screen is reused while nothing was tapped, and the app state is only asked for when the screen no longer belongs to the app. In the iOS Settings (depth 3, 50 screens) this cut the restarts from 18 to 5 and the crawl from 9 to about 7 minutes.
-2. **Wait until the screen is still.** After every tap and launch the screen is read again until two reads in a row show the same layout (type, position and size of every element; texts do not count, so a clock or a feed does not keep it waiting) and it is not empty. Without this, a read during a push animation lists the old and the new screen at once, and a read while loading lists nothing: such a screen gets wrong actions, the way back to it fails, and the pages behind it are never found.
+1. **Explore.** After launch (and login), the crawler reads the accessibility tree (on the simulator straight from `idb_companion` over its local socket, which saves starting the `idb` tool for every read, tap and screenshot; `SNAPPCRAWL_IDB=cli` uses the tool), collects tappable elements (buttons, cells, tabs, links), and explores breadth-first with navigation first (see [Crawl order](#crawl-order)). To get back to a screen it first tries without a restart: from the screen that is showing, or after tapping *Back* up to three times, it follows the taps from a screen on the way. Only when that fails does it relaunch the app and replay the taps that led there. A read of the screen is reused while nothing was tapped, and the app state is only asked for when the screen no longer belongs to the app. In the iOS Settings (depth 3, 50 screens) this cut the restarts from 18 to 5, and with the direct line to `idb_companion` the crawl from 9 to about 5½ minutes.
+2. **Wait until the screen is still.** After a tap the screen is first read after a third of `settleMs`; the full `settleMs` is only waited for while it still looks as before the tap. Then it is read again until two reads in a row show the same layout (type, position and size of every element; texts do not count, so a clock or a feed does not keep it waiting) and it is not empty. Without this, a read during a push animation lists the old and the new screen at once, and a read while loading lists nothing: such a screen gets wrong actions, the way back to it fails, and the pages behind it are never found. The picture of a new screen is kept once a second one a moment later agrees with it and it shows no scroll bar (iOS shows one for a moment when a list appears), so two runs do not differ by timing alone.
 3. **Identify screens.** A screen's identity is a fingerprint of its accessibility structure, with numbers masked, so a clock or a counter does not create a "new" screen. Web content inside the app (ad banners, embedded pages) is left out, so a rotating banner does not either. When the fingerprint differs, a **signature** decides: the stable parts of a screen (navigation bar title, selected tab, buttons, toolbar, layout) count, feed texts in cells, numbers, dates and ads count little or not at all. Two views are the same screen from a similarity of `crawl.matchThreshold` (0.8); a different navigation bar title always means a different screen. The same rule is used for replays (every step is checked and logged as `replay s002 ok · match 0.91`) and for matching screens between two runs. Screens are named after the navigation bar title, else the selected tab, else the first large text near the top, else the action that led there; repeated names get " (2)", " (3)".
 4. **Detect crashes.** After every tap snappcrawl checks whether the app process is still alive and records a crash node in the graph.
 5. **Compare.** A run that [followed the baseline](#comparable-runs-following-the-baseline) knows for every screen which baseline screen it is. Otherwise screens of two runs are matched by the path of taps that reached them, then by fingerprint. Matched screenshots are compared with [pixelmatch](https://github.com/mapbox/pixelmatch); changed pixels are grouped into regions. Screens only in the new run are *new*; screens only in the baseline are *unreachable*. On matched screens, buttons are paired by label and place, which gives the [renamed, moved and removed](#label-and-place-renamed-and-moved-buttons) hints.
@@ -536,6 +560,7 @@ Then `snappcrawl diff --ai`, or **Notes** in the web UI. Global settings live in
 ```
 .snappcrawl/
 ├── baselines.json               # baseline run per app
+├── ignore.json                  # areas left out of the comparison, per app
 ├── reports/                     # exported HTML reports
 │   └── snappcrawl-<app>-<head>-<summary|full>.html
 ├── runs/<run-id>/
@@ -554,7 +579,6 @@ Add `.snappcrawl/` to `.gitignore` (`snappcrawl init` does this).
 - Apps with poor accessibility labels expose fewer tappable elements; a screenshot-based fallback is planned.
 - Lists with endless dynamic content can produce many similar screens; use `--max-per-list`, `maxScreens` and `maxDepth`.
 - An app that really behaves differently on the same tap (Maps opens a profile sheet over a collapsed or an expanded panel) still shows a *new* screen after the retry. Mark it in the review.
-- Planned: ignore regions per screen.
 
 ## Development
 

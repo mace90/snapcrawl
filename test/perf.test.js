@@ -43,3 +43,26 @@ test('perf: the app state is asked only when the screen is not the app’s own',
   assert.ok(atlas.screens.some((s) => s.crash), 'the crash is still found');
   assert.ok(n.states <= 2, `${n.states} app state queries for ${taps} transitions`);
 });
+
+test('relaunch: an app that reopens where it was left is taken back, its screens are not one-time', async () => {
+  const store = new Store(fs.mkdtempSync(path.join(os.tmpdir(), 'snappcrawl-'))).ensure();
+  const cfgFor = (app) => {
+    const cfg = structuredClone(DEFAULTS);
+    cfg.app.bundleId = 'com.pulse.app';
+    Object.assign(cfg.auth, { username: app.user, password: app.pass, mfa: 'totp', totpSecret: app.secret });
+    Object.assign(cfg.crawl, { settleMs: 0, launchMs: 0 });
+    return cfg;
+  };
+  const first = new FakeApp();
+  store.setBaseline((await crawl({ driver: first, cfg: cfgFor(first), store, io: { log() {}, ask: async () => '' } })).meta.id);
+  // the first tap on "Profil" shows another profile: tried once more after a fresh start, which
+  // reopens the app on that profile, like iOS Settings reopens on the page it was left on
+  const app = new FakeApp({ restore: true, flaky: 1 });
+  const logs = [];
+  const atlas = await crawl({ driver: app, cfg: cfgFor(app), store, io: { log: (l, m) => logs.push(m), ask: async () => '' } });
+  assert.equal(atlas.meta.status, 'done');
+  assert.ok(app.reopened > 0, 'the app reopened on a deeper screen');
+  assert.ok(logs.some((m) => /opened on (s\d+ )?".+" · it remembers where it was · going back/.test(m)), logs.join('\n'));
+  assert.ok(!logs.some((m) => /launch screen is now/.test(m)));
+  assert.ok(atlas.screens.every((s) => !s.oneTime));
+});
