@@ -1,5 +1,5 @@
 name: snappcrawl check
-description: Crawl your iOS app in the Simulator and compare every screen with the base branch. Screenshots, texts, buttons, navigation, crashes.
+description: 'Crawl your iOS app in the Simulator and compare every screen with the base branch. Screenshots, texts, buttons, navigation, crashes.'
 author: snappcrawl
 branding:
   icon: smartphone
@@ -7,51 +7,51 @@ branding:
 
 inputs:
   working-directory:
-    description: Folder with the Xcode project or workspace
+    description: 'Folder with the Xcode project or workspace'
     default: .
   project:
-    description: .xcodeproj or .xcworkspace (default: the only one in working-directory)
+    description: '.xcodeproj or .xcworkspace (default: the only one in working-directory)'
     default: ''
   scheme:
-    description: Scheme to build (default: the only one, or the one named like the project)
+    description: 'Scheme to build (default: the only one, or the one named like the project)'
     default: ''
   configuration:
-    description: Build configuration
+    description: 'Build configuration'
     default: Debug
   build-settings:
-    description: Extra build settings, one KEY=VALUE per line
+    description: 'Extra build settings, one KEY=VALUE per line'
     default: ''
   base-ref:
-    description: Git state to compare with; it is built and crawled first as the baseline (default the pull request's base, else HEAD~1)
+    description: 'Git state to compare with; it is built and crawled first as the baseline (default the pull request''s base, else HEAD~1)'
     default: ''
   simulator:
-    description: Simulator name (default the newest available iPhone)
+    description: 'Simulator name (default the newest available iPhone)'
     default: ''
   max-screens:
-    description: Stop after this many screens
+    description: 'Stop after this many screens'
     default: '40'
   max-depth:
-    description: Taps away from the start screen
+    description: 'Taps away from the start screen'
     default: '4'
   minutes:
-    description: Time limit per crawl
+    description: 'Time limit per crawl'
     default: '10'
   fail-on:
     description: 'When the step fails: broken (a new crash or unreachable screen), changes (any open change), never'
     default: broken
   comment:
-    description: Post the result as a pull request comment (needs pull-requests write permission)
+    description: 'Post the result as a pull request comment (needs pull-requests write permission)'
     default: 'true'
   node-version:
-    description: Node.js for snappcrawl
+    description: 'Node.js for snappcrawl'
     default: '22'
 
 outputs:
   verdict:
-    description: passed | changes | broken | failed | input | error
+    description: 'passed | changes | broken | failed | input | error'
     value: ${{ steps.check.outputs.verdict }}
   report:
-    description: Path of the full HTML report
+    description: 'Path of the full HTML report'
     value: ${{ steps.check.outputs.report }}
 
 runs:
@@ -97,7 +97,18 @@ runs:
       run: |
         base="${BASE_REF:-HEAD~1}"
         git cat-file -e "$base^{commit}" 2>/dev/null || git fetch --no-tags --depth=50 origin "$base" || true
-        args=(check --build --base-ref "$base" --udid "${{ steps.sim.outputs.name }}" --max-screens "${{ inputs.max-screens }}" --max-depth "${{ inputs.max-depth }}" --minutes "${{ inputs.minutes }}" --configuration "${{ inputs.configuration }}" --label "${GITHUB_SHA::8}" --json --junit snappcrawl-junit.xml)
+        # the app does not exist in the base yet (its first pull request): crawl this change only,
+        # as the baseline
+        here="$(git rev-parse --show-prefix)"
+        if git cat-file -e "$base^{commit}" 2>/dev/null && [ -n "$(git ls-tree --name-only "$base" -- "${here:-./}" | grep -E '\.xc(odeproj|workspace)$' || true)" ]; then
+          baseargs=(--base-ref "$base")
+        elif git cat-file -e "$base^{commit}" 2>/dev/null && [ -z "$here" ] && git ls-tree --name-only "$base" | grep -qE '\.xc(odeproj|workspace)$'; then
+          baseargs=(--base-ref "$base")
+        else
+          echo "::notice::no Xcode project in ${base::8} at ${here:-the root} · crawling this change only, as the baseline"
+          baseargs=()
+        fi
+        args=(check --build "${baseargs[@]}" --udid "${{ steps.sim.outputs.name }}" --max-screens "${{ inputs.max-screens }}" --max-depth "${{ inputs.max-depth }}" --minutes "${{ inputs.minutes }}" --configuration "${{ inputs.configuration }}" --label "${GITHUB_SHA::8}" --json --junit snappcrawl-junit.xml)
         [ -n "${{ inputs.project }}" ] && args+=(--project "${{ inputs.project }}")
         [ -n "${{ inputs.scheme }}" ] && args+=(--scheme "${{ inputs.scheme }}")
         while IFS= read -r s; do [ -n "$s" ] && args+=(--set "$s"); done <<< "${{ inputs.build-settings }}"
@@ -108,7 +119,10 @@ runs:
         verdict=$(node -e 'try { console.log(JSON.parse(require("fs").readFileSync("snappcrawl-result.json", "utf8")).verdict) } catch { console.log("error") }')
         echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
         echo "code=$code" >> "$GITHUB_OUTPUT"
-        if [ "$verdict" != "error" ] && [ "$verdict" != "input" ]; then
+        if [ "$verdict" = "baseline" ]; then
+          node -e 'const r = JSON.parse(require("fs").readFileSync("snappcrawl-result.json", "utf8")); console.log(`### snappcrawl · ${r.app} · baseline\n\nNothing to compare with yet: the base has no build of the app. This change was crawled and saved as the baseline: ${r.screens} screens${r.crashes ? `, ${r.crashes} crash${r.crashes > 1 ? "es" : ""}` : ", no crash"}.`)' > snappcrawl-summary.md
+          snappcrawl report --full --out snappcrawl-report.html >/dev/null 2>&1 || true
+        elif [ "$verdict" != "error" ] && [ "$verdict" != "input" ]; then
           snappcrawl diff --markdown > snappcrawl-summary.md || true
           snappcrawl report --full --out snappcrawl-report.html >/dev/null || true
           echo "report=$PWD/snappcrawl-report.html" >> "$GITHUB_OUTPUT"
