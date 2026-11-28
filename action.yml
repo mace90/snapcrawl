@@ -65,12 +65,17 @@ runs:
       shell: bash
       run: |
         brew tap facebook/fb >/dev/null
-        brew install idb-companion >/dev/null || true
+        brew trust facebook/fb >/dev/null 2>&1 || true   # newer Homebrew refuses untrusted taps
+        brew install idb-companion >/dev/null
         command -v pipx >/dev/null || brew install pipx >/dev/null
-        pipx install fb-idb >/dev/null || true
+        pipx install fb-idb >/dev/null
+        export PATH="$HOME/.local/bin:$PATH"
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-        npm install --global --omit=dev "${{ github.action_path }}" >/dev/null
-        echo "snappcrawl $(snappcrawl --version)"
+        command -v idb_companion >/dev/null && command -v idb >/dev/null || { echo "::error::idb did not install"; exit 1; }
+        # a packed copy installs its dependencies (installing the folder would only link it)
+        tgz=$(cd "${{ github.action_path }}" && npm pack --silent --pack-destination "$RUNNER_TEMP" | tail -1)
+        npm install --global "$RUNNER_TEMP/$tgz" >/dev/null
+        echo "snappcrawl $(snappcrawl --version) · $(idb --help >/dev/null 2>&1 && echo idb ok)"
 
     - name: Boot a simulator
       id: sim
